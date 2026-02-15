@@ -1,4 +1,4 @@
-# filter_chess_data_streaming.py
+# prepare_chess_data.py
 import zstandard as zstd
 import chess
 import chess.pgn
@@ -8,6 +8,12 @@ import numpy as np
 from tqdm import tqdm
 import random
 import os
+import glob
+from multiprocessing import Pool, cpu_count
+
+# ============================================
+# PART 1: YOUR EXISTING FUNCTIONS
+# ============================================
 
 def safe_elo(elo_str):
     """Convert ELO safely"""
@@ -17,6 +23,7 @@ def safe_elo(elo_str):
         return 0
     except:
         return 0
+
 def board_to_tensor(board):
     """Convert a chess board to a 19x8x8 tensor"""
     # Piece channels (12: 6 piece types x 2 colors)
@@ -65,30 +72,201 @@ def board_to_tensor(board):
     
     return torch.FloatTensor(tensor)
 
-def process_file_streaming(zst_path, min_elo=1500, samples_per_game=10, 
-                          max_positions=500000, output_prefix="chess_data"):
+def enhanced_evaluate(board):
     """
-    Process file in streaming mode - NEVER stores all positions in memory!
-    Saves directly to disk in chunks
+    Position evaluation using multiple heuristics
+    Returns value between -1 and 1
     """
-    print(f"Processing {zst_path} in STREAMING mode...")
+    if board.is_checkmate():
+        return -1.0 if board.turn == chess.WHITE else 1.0
+    if board.is_stalemate() or board.is_insufficient_material():
+        return 0.0
     
-    chunk_size = 10000  # Save every 10k positions
-    positions_processed = 0
-    current_chunk = []
-    chunk_num = 0
+    score = 0
     
-    # Open the compressed file
+    # 1. Material (weight: 1.0)
+    piece_values = {
+        chess.PAWN: 100, chess.KNIGHT: 320, chess.BISHOP: 330,
+        chess.ROOK: 500, chess.QUEEN: 900, chess.KING: 0
+    }
+    
+    for square in chess.SQUARES:
+        piece = board.piece_at(square)
+        if piece:
+            value = piece_values[piece.piece_type]
+            if piece.color == chess.WHITE:
+                score += value
+            else:
+                score -= value
+    
+    # 2. Piece-square tables (positional bonuses) 
+    # FIXED: Pawns on 8th rank are handled by material (they'll be queens!)
+    pawn_table = [
+        [0,  0,  0,  0,  0,  0,  0,  0],  # Rank 8 - promotion (bonus from material)
+        [50, 50, 50, 50, 50, 50, 50, 50], # Rank 7 - near promotion
+        [10, 10, 20, 30, 30, 20, 10, 10], # Rank 6
+        [5,  5, 10, 25, 25, 10,  5,  5],  # Rank 5
+        [0,  0,  0, 20, 20,  0,  0,  0],  # Rank 4
+        [0,  0,  0,  0,  0,  0,  0,  0],  # Rank 3
+        [0,  0,  0,  0,  0,  0,  0,  0],  # Rank 2
+        [0,  0,  0,  0,  0,  0,  0,  0]   # Rank 1
+    ]
+    
+    # Knights: center good, edges bad
+    knight_table = [
+        [-50,-40,-30,-30,-30,-30,-40,-50],
+        [-40,-20,  0,  0,  0,  0,-20,-40],
+        [-30,  0, 10, 15, 15, 10,  0,-30],
+        [-30,  5, 15, 20, 20, 15,  5,-30],
+        [-30,  0, 15, 20, 20, 15,  0,-30],
+        [-30,  5, 10, 15, 15, 10,  5,-30],
+        [-40,-20,  0,  5,  5,  0,-20,-40],
+        [-50,-40,-30,-30,-30,-30,-40,-50]
+    ]
+    
+    # Bishops: like center, avoid corners
+    bishop_table = [
+        [-20,-10,-10,-10,-10,-10,-10,-20],
+        [-10,  0,  0,  0,  0,  0,  0,-10],
+        [-10,  0,  5, 10, 10,  5,  0,-10],
+        [-10,  5,  5, 10, 10,  5,  5,-10],
+        [-10,  0, 10, 10, 10, 10,  0,-10],
+        [-10, 10, 10, 10, 10, 10, 10,-10],
+        [-10,  5,  0,  0,  0,  0,  5,-10],
+        [-20,-10,-10,-10,-10,-10,-10,-20]
+    ]
+    
+    # Rooks: prefer open files, 7th rank
+    rook_table = [
+        [0,  0,  0,  0,  0,  0,  0,  0],
+        [5, 10, 10, 10, 10, 10, 10,  5],
+        [-5,  0,  0,  0,  0,  0,  0, -5],
+        [-5,  0,  0,  0,  0,  0,  0, -5],
+        [-5,  0,  0,  0,  0,  0,  0, -5],
+        [-5,  0,  0,  0,  0,  0,  0, -5],
+        [-5,  0,  0,  0,  0,  0,  0, -5],
+        [0,  0,  0,  5,  5,  0,  0,  0]
+    ]
+    
+    # Queens: combine rook and bishop patterns
+    queen_table = [
+        [-20,-10,-10, -5, -5,-10,-10,-20],
+        [-10,  0,  0,  0,  0,  0,  0,-10],
+        [-10,  0,  5,  5,  5,  5,  0,-10],
+        [-5,  0,  5,  5,  5,  5,  0, -5],
+        [0,  0,  5,  5,  5,  5,  0, -5],
+        [-10,  5,  5,  5,  5,  5,  0,-10],
+        [-10,  0,  5,  0,  0,  0,  0,-10],
+        [-20,-10,-10, -5, -5,-10,-10,-20]
+    ]
+    
+    # Apply piece-square tables
+    for square in chess.SQUARES:
+        piece = board.piece_at(square)
+        if not piece:
+            continue
+            
+        row = square // 8
+        col = square % 8
+        
+        # Flip row for black pieces
+        if piece.color == chess.BLACK:
+            row = 7 - row
+        
+        bonus = 0
+        if piece.piece_type == chess.PAWN:
+            # FIXED: Only give bonus if not on promotion rank
+            if (piece.color == chess.WHITE and row < 7) or (piece.color == chess.BLACK and row > 0):
+                bonus = pawn_table[row][col]
+        elif piece.piece_type == chess.KNIGHT:
+            bonus = knight_table[row][col]
+        elif piece.piece_type == chess.BISHOP:
+            bonus = bishop_table[row][col]
+        elif piece.piece_type == chess.ROOK:
+            bonus = rook_table[row][col]
+        elif piece.piece_type == chess.QUEEN:
+            bonus = queen_table[row][col]
+        
+        if piece.color == chess.WHITE:
+            score += bonus
+        else:
+            score -= bonus
+    
+    # 3. Mobility (number of legal moves)
+    white_moves = len(list(board.legal_moves)) if board.turn == chess.WHITE else 0
+    black_moves = len(list(board.legal_moves)) if board.turn == chess.BLACK else 0
+    mobility_score = (white_moves - black_moves) * 2
+    score += mobility_score
+    
+    # 4. Center control
+    center_squares = [chess.E4, chess.D4, chess.E5, chess.D5]
+    center_control = 0
+    for square in center_squares:
+        if board.is_attacked_by(chess.WHITE, square):
+            center_control += 5
+        if board.is_attacked_by(chess.BLACK, square):
+            center_control -= 5
+    score += center_control
+    
+    # 5. King safety
+    if board.has_castling_rights(chess.WHITE):
+        score += 30
+    if board.has_castling_rights(chess.BLACK):
+        score -= 30
+    
+    white_king_square = board.king(chess.WHITE)
+    black_king_square = board.king(chess.BLACK)
+    
+    if white_king_square:
+        king_file = chess.square_file(white_king_square)
+        king_rank = chess.square_rank(white_king_square)
+        if king_rank < 3:
+            score -= 20
+        for offset in [-1, 0, 1]:
+            shield_square = chess.square(king_file + offset, king_rank + 1)
+            if 0 <= shield_square < 64:
+                piece = board.piece_at(shield_square)
+                if not piece or piece.piece_type != chess.PAWN or piece.color != chess.WHITE:
+                    score -= 10
+    
+    if black_king_square:
+        king_file = chess.square_file(black_king_square)
+        king_rank = chess.square_rank(black_king_square)
+        if king_rank > 4:
+            score += 20
+        for offset in [-1, 0, 1]:
+            shield_square = chess.square(king_file + offset, king_rank - 1)
+            if 0 <= shield_square < 64:
+                piece = board.piece_at(shield_square)
+                if not piece or piece.piece_type != chess.PAWN or piece.color != chess.BLACK:
+                    score += 10
+    
+    # Normalize to [-1, 1]
+    return np.tanh(score / 1000.0)
+def move_to_index(move):
+    """Convert move to index (simplified but works)"""
+    return move.from_square * 64 + move.to_square
+
+
+def extract_positions_from_file(zst_path, min_elo=1500, max_positions=500000):
+    """
+    Extract positions and moves from a .zst file
+    Returns: list of (board, next_move)
+    """
+    print(f"\nLoading {zst_path}...")
+    
+    positions_data = []  # Each element: (board, next_move)
+    games_processed = 0
+    games_kept = 0
+    
     with open(zst_path, 'rb') as f:
         dctx = zstd.ZstdDecompressor()
         with dctx.stream_reader(f) as reader:
             text_stream = io.TextIOWrapper(reader, encoding='utf-8')
             
             pbar = tqdm(desc="Processing games")
-            games_processed = 0
-            games_kept = 0
             
-            while positions_processed < max_positions:
+            while len(positions_data) < max_positions:
                 try:
                     game = chess.pgn.read_game(text_stream)
                     if game is None:
@@ -102,113 +280,98 @@ def process_file_streaming(zst_path, min_elo=1500, samples_per_game=10,
                     
                     if white_elo >= min_elo and black_elo >= min_elo:
                         games_kept += 1
-                        board = game.board()
                         
-                        # Sample positions from this game
+                        board = game.board()
                         moves = list(game.mainline_moves())
-                        if moves:
-                            # Take up to samples_per_game random positions
-                            sample_indices = random.sample(
-                                range(len(moves)), 
-                                min(samples_per_game, len(moves))
-                            )
+                        
+                        # For each position, record the next move
+                        for i in range(len(moves) - 1):
+                            # Position before move i
+                            pos_board = game.board()
+                            for move in moves[:i]:
+                                pos_board.push(move)
                             
-                            for i, move_idx in enumerate(sorted(sample_indices)):
-                                # Replay to this position
-                                temp_board = game.board()
-                                for move in moves[:move_idx + 1]:
-                                    temp_board.push(move)
-                                
-                                # Convert to tensor
-                                tensor = board_to_tensor(temp_board)
-                                current_chunk.append({
-                                    'tensor': tensor,
-                                    'game_id': f"{games_kept}_{i}",
-                                    'white_elo': white_elo,
-                                    'black_elo': black_elo,
-                                    'result': game.headers.get('Result', '*')
-                                })
-                                positions_processed += 1
-                                
-                                # Save chunk when full
-                                if len(current_chunk) >= chunk_size:
-                                    save_chunk(current_chunk, chunk_num, output_prefix)
-                                    chunk_num += 1
-                                    current_chunk = []
-                                
-                                if positions_processed >= max_positions:
-                                    break
+                            # The move played from this position
+                            next_move = moves[i]
+                            
+                            positions_data.append((pos_board, next_move))
+                            
+                            if len(positions_data) >= max_positions:
+                                break
                     
-                    pbar.set_description(f"Kept: {games_kept} games, {positions_processed} positions")
-                    
+                    if games_processed % 1000 == 0:
+                        pbar.set_description(f"Games: {games_kept}/{games_processed} | Positions: {len(positions_data)}")
+                        
                 except Exception as e:
                     continue
             
             pbar.close()
     
-    # Save final chunk
-    if current_chunk:
-        save_chunk(current_chunk, chunk_num, output_prefix)
-    
-    print(f"\nComplete! Saved {positions_processed} positions in {chunk_num + 1} chunks")
-    return chunk_num + 1
+    print(f"\n✅ Extracted {len(positions_data)} positions from {games_kept} games")
+    return positions_data
 
-def save_chunk(chunk, chunk_num, output_prefix):
-    """Save a chunk of positions to disk"""
-    filename = f"{output_prefix}_chunk_{chunk_num:04d}.pt"
-    
-    # Extract tensors and metadata
-    tensors = torch.stack([item['tensor'] for item in chunk])
-    metadata = [{k: v for k, v in item.items() if k != 'tensor'} for item in chunk]
-    
-    # Save
-    torch.save({
-        'tensors': tensors,
-        'metadata': metadata
-    }, filename)
-    
-    print(f"\nSaved chunk {chunk_num} with {len(chunk)} positions to {filename}")
-
-def create_dataset_loader(output_prefix, batch_size=64):
+def prepare_training_data(positions_data):
     """
-    Create a PyTorch DataLoader that streams from saved chunks
+    Convert (board, next_move) pairs to tensors with evaluations
     """
-    import glob
+    print("Converting to tensors and evaluating...")
     
-    class ChessDataset(torch.utils.data.IterableDataset):
-        def __init__(self, chunk_files):
-            self.chunk_files = chunk_files
-        
-        def __iter__(self):
-            for chunk_file in self.chunk_files:
-                data = torch.load(chunk_file)
-                for i, tensor in enumerate(data['tensors']):
-                    yield tensor, data['metadata'][i]
+    X = []
+    y_value = []
+    y_policy = []
     
-    chunk_files = sorted(glob.glob(f"{output_prefix}_chunk_*.pt"))
-    dataset = ChessDataset(chunk_files)
-    loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size)
+    for board, next_move in tqdm(positions_data):
+        X.append(board_to_tensor(board))
+        y_value.append(enhanced_evaluate(board))
+        y_policy.append(move_to_index(next_move))
     
-    return loader
+    # Stack tensors
+    X = torch.stack(X)
+    y_value = torch.tensor(y_value, dtype=torch.float32)
+    y_policy = torch.tensor(y_policy, dtype=torch.long)
+    
+    return X, y_value, y_policy
 
-# ===== MAIN EXECUTION =====
+# ============================================
+# MAIN
+# ============================================
+
 if __name__ == "__main__":
     MIN_ELO = 1500
-    MAX_POSITIONS = 500000  # Stop after 500k positions (adjust based on your needs)
+    MAX_POSITIONS = [500000,200000] # Total positions to collect
     
-    files_to_process = [
+    files = [
         "lichess_db_standard_rated_2015-01.pgn.zst",
         "lichess_db_standard_rated_2013-01.pgn.zst",
     ]
     
-    for file in files_to_process:
+    all_positions_data = []
+    i = 0
+    for file in files:
         if os.path.exists(file):
-            process_file_streaming(
-                file,
+            positions_data = extract_positions_from_file(
+                file, 
                 min_elo=MIN_ELO,
-                max_positions=MAX_POSITIONS // len(files_to_process),
-                output_prefix=f"chess_{file[:4]}_{MIN_ELO}elo"
+                max_positions=MAX_POSITIONS[i]
             )
+            all_positions_data.extend(positions_data)
+        i = i+1
     
-    print("\n✅ Streaming processing complete!")
-    print(f"Data saved in chunks: chess_*_{MIN_ELO}elo_chunk_*.pt")
+    print(f"\nTotal positions collected: {len(all_positions_data)}")
+    
+    # Convert to tensors
+    X, y_value, y_policy = prepare_training_data(all_positions_data)
+    
+    # Save everything
+    print("Saving training data...")
+    torch.save({
+        'X': X,
+        'y_value': y_value,
+        'y_policy': y_policy,
+        'num_positions': len(X)
+    }, 'chess_training_data.pt')
+    
+    print(f"\n✅ Done! Saved {len(X)} positions to chess_training_data.pt")
+    print(f"   X shape: {X.shape}")
+    print(f"   y_value shape: {y_value.shape}")
+    print(f"   y_policy shape: {y_policy.shape}")
