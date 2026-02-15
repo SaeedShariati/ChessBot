@@ -19,58 +19,56 @@ from tqdm import tqdm
 # ============================================
 
 class ChessNet(nn.Module):
-    """A lightweight CNN for chess position evaluation"""
-    
     def __init__(self):
         super(ChessNet, self).__init__()
         
-        # Input: 19 channels (piece positions, castling, en passant, turn)
-        # 8x8 board representation
-        
-        # Convolutional layers
-        self.conv1 = nn.Conv2d(19, 128, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(128)
-        
-        self.conv2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(128)
-        
-        self.conv3 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(128)
-        
-        self.conv4 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-        self.bn4 = nn.BatchNorm2d(128)
-        
-        # Policy head (move prediction)
-        self.policy_conv = nn.Conv2d(128, 32, kernel_size=1)
-        self.policy_bn = nn.BatchNorm2d(32)
-        self.policy_fc = nn.Linear(32 * 64, 4096)  # 64x64 possible moves (simplified)
-        
-        # Value head (position evaluation)
-        self.value_conv = nn.Conv2d(128, 32, kernel_size=1)
-        self.value_bn = nn.BatchNorm2d(32)
-        self.value_fc1 = nn.Linear(32 * 64, 256)
-        self.value_fc2 = nn.Linear(256, 1)
-        
-    def forward(self, x):
-        # Common layers
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
-        x = F.relu(self.bn4(self.conv4(x)))
+        # Common feature extraction layers using Sequential
+        self.features = nn.Sequential(
+            # Block 1
+            nn.Conv2d(19, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            
+            # Block 2
+            nn.Conv2d(128, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            
+            # Block 3
+            nn.Conv2d(128, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            
+            # Block 4
+            nn.Conv2d(128, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+        )
         
         # Policy head
-        policy = F.relu(self.policy_bn(self.policy_conv(x)))
-        policy = policy.view(policy.size(0), -1)  # Flatten
-        policy = self.policy_fc(policy)
+        self.policy = nn.Sequential(
+            nn.Conv2d(128, 32, 1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Flatten(),
+            nn.Linear(32 * 64, 4096)
+        )
         
         # Value head
-        value = F.relu(self.value_bn(self.value_conv(x)))
-        value = value.view(value.size(0), -1)  # Flatten
-        value = F.relu(self.value_fc1(value))
-        value = torch.tanh(self.value_fc2(value))  # Output between -1 and 1
-        
-        return policy, value
-
+        self.value = nn.Sequential(
+            nn.Conv2d(128, 32, 1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Flatten(),
+            nn.Linear(32 * 64, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, 1),
+            nn.Tanh()
+        )
+    
+    def forward(self, x):
+        features = self.features(x)
+        return self.policy(features), self.value(features)
 
 def board_to_tensor(board):
     """Convert a chess board to a 19x8x8 tensor"""
