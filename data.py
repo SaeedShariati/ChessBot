@@ -331,12 +331,12 @@ def process_file_batched(zst_path, min_elo=1500, max_positions=500000,
         save_batch(current_X, current_V, current_P, output_prefix, batch_num)
         batch_num += 1
     
-    print(f"\n\n✅ Done! Saved {total_positions} positions in {batch_num} batches")
+    print(f"\n\n Done! Saved {total_positions} positions in {batch_num} batches")
     return batch_num
 
 def save_batch(tensors, values, policies, prefix, batch_num):
     """Save a single batch to disk"""
-    print(f"\n💾 Saving batch {batch_num} with {len(tensors)} positions...")
+    print(f"\n Saving batch {batch_num} with {len(tensors)} positions...")
     
     # Stack tensors
     X = torch.stack(tensors)
@@ -399,4 +399,4 @@ if __name__ == "__main__":
                 output_prefix="chess_data"
             )
         i=i+1
-    print(f"\n✅ Done! Saved ")
+    print(f"\n Done! Saved ")
