@@ -234,6 +234,18 @@ class MCTS:
         # Choose the most visited child
         best_child = max(root.children.items(), key=lambda item: item[1].visits)
         return best_child[0]
+
+
+
+
+
+
+
+
+
+
+
+        
 class ChessEngine:
     def __init__(self, model_path=None):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -246,86 +258,118 @@ class ChessEngine:
             print("Initializing new model")
         
         self.mcts = None
-    def train_from_file(self, data_file="chess_training_data.pt", epochs=10, batch_size=64):
-        print(f"Loading training data from {data_file}...")
+    def train_from_batches(self, data_prefix="chess_data", epochs=10, batch_size=64):
+        """
+        Train using batched data files and save models with validation loss in filename
+        """
+        import glob
         
-        # Load data
-        data = torch.load(data_file)
-        X = data['X']
-        y_value = data['y_value']
-        y_policy = data['y_policy']
+        print(f"Loading batches from ./chess_data/{data_prefix}_batch_*.pt...")
         
-        print(f"Loaded {len(X)} positions")
+        # Find all batch files
+        batch_files = sorted(glob.glob(f"./chess_data/{data_prefix}_batch_*.pt"))
         
-        # Simple train/val split
-        split = int(0.8 * len(X))
-        indices = list(range(len(X)))
-        random.shuffle(indices)
+        if not batch_files:
+            print("No batch files found!")
+            return
+        
+        # Split into train/val (80/20 by files)
+        split = int(0.8 * len(batch_files))
+        train_files = batch_files[:split]
+        val_files = batch_files[split:]
+        
+        print(f"Found {len(batch_files)} batches: {len(train_files)} train, {len(val_files)} val")
+        
+        # Simple dataset class
+        class SimpleChessDataset(torch.utils.data.IterableDataset):
+            def __init__(self, files):
+                self.files = files
+            
+            def __iter__(self):
+                for f in self.files:
+                    data = torch.load(f)
+                    for i in range(len(data['X'])):
+                        yield data['X'][i], data['y_value'][i], data['y_policy'][i]
         
         # Create data loaders
         train_loader = torch.utils.data.DataLoader(
-            torch.utils.data.TensorDataset(
-                X[indices[:split]], 
-                y_value[indices[:split]].unsqueeze(1), 
-                y_policy[indices[:split]]
-            ), 
-            batch_size=batch_size, 
-            shuffle=True
+            SimpleChessDataset(train_files),
+            batch_size=batch_size,
+            num_workers=0
         )
         
         val_loader = torch.utils.data.DataLoader(
-            torch.utils.data.TensorDataset(
-                X[indices[split:]], 
-                y_value[indices[split:]].unsqueeze(1), 
-                y_policy[indices[split:]]
-            ), 
-            batch_size=batch_size
+            SimpleChessDataset(val_files),
+            batch_size=batch_size,
+            num_workers=0
         )
         
-        # Training
+        # Training setup
         device = self.device
         self.model = self.model.to(device)
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001,weight_decay=1e-4)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=0.001, weight_decay=1e-4)
+        
+        print(f"\nStarting training for {epochs} epochs...")
+        
+        best_val_loss = float('inf')
         
         for epoch in range(epochs):
             # Training
             self.model.train()
             train_loss = 0
+            train_batches = 0
+            
             for batch_X, batch_v, batch_p in train_loader:
                 batch_X = batch_X.to(device)
-                batch_v = batch_v.to(device)
+                batch_v = batch_v.to(device).unsqueeze(1)
                 batch_p = batch_p.to(device)
                 
                 optimizer.zero_grad()
                 policy_out, value_out = self.model(batch_X)
                 
-                loss = (torch.nn.functional.mse_loss(value_out, batch_v) + 
-                    torch.nn.functional.cross_entropy(policy_out, batch_p))
+                loss = (F.mse_loss(value_out, batch_v) + 
+                    F.cross_entropy(policy_out, batch_p))
                 
                 loss.backward()
                 optimizer.step()
+                
                 train_loss += loss.item()
+                train_batches += 1
             
             # Validation
             self.model.eval()
             val_loss = 0
+            val_batches = 0
+            
             with torch.no_grad():
                 for batch_X, batch_v, batch_p in val_loader:
                     batch_X = batch_X.to(device)
-                    batch_v = batch_v.to(device)
+                    batch_v = batch_v.to(device).unsqueeze(1)
                     batch_p = batch_p.to(device)
                     
                     policy_out, value_out = self.model(batch_X)
-                    val_loss += (torch.nn.functional.mse_loss(value_out, batch_v) + 
-                            torch.nn.functional.cross_entropy(policy_out, batch_p)).item()
+                    loss = (F.mse_loss(value_out, batch_v) + 
+                        F.cross_entropy(policy_out, batch_p))
+                    
+                    val_loss += loss.item()
+                    val_batches += 1
             
-            print(f"Epoch {epoch+1}: Train Loss: {train_loss/len(train_loader):.4f}, "
-                f"Val Loss: {val_loss/len(val_loader):.4f}")
+            avg_train = train_loss / train_batches
+            avg_val = val_loss / val_batches
+            
+            # Track best model
+            if avg_val < best_val_loss:
+                best_val_loss = avg_val
+                best_filename = f"chess_model_BEST_val_{best_val_loss:.4f}.pth"
+                # Save a copy as the best model
+                torch.save(self.model.state_dict(), best_filename)
+                print(f"Epoch {epoch+1}: Train Loss: {avg_train:.4f}, Val Loss: {avg_val:.4f} ✓ BEST SO FAR")
+            else:
+                print(f"Epoch {epoch+1}: Train Loss: {avg_train:.4f}, Val Loss: {avg_val:.4f}")
         
-        # Save
-        torch.save(self.model.state_dict(), "chess_model.pth")
-        print("Model saved to chess_model.pth")
-        
+        print(f"\nTraining complete!")
+        print(f"Best validation loss: {best_val_loss:.4f}")
+        print(f"Best model saved as: chess_model_BEST_val_{best_val_loss:.4f}.pth")
     # Keep your existing play_move and play_game methods
     def play_move(self, board, num_simulations=800):
         if self.mcts is None:
@@ -388,7 +432,7 @@ def main():
     
     while True:
         print("\nOptions:")
-        print("1. Train model from pre-processed chunks")
+        print("1. Train model")
         print("2. Load existing model")
         print("3. Play against engine")
         print("4. Watch engine vs random")
@@ -401,8 +445,8 @@ def main():
             epochs = int(input("Number of epochs (5-20): "))
             batch_size = 64
             
-            engine.train_from_file(
-                data_file="chess_training_data.pt",
+            engine.train_from_batches(
+                data_prefix="chess_data",  # This matches your batch files: chess_data_batch_*.pt
                 epochs=epochs,
                 batch_size=batch_size
             )

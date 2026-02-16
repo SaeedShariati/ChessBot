@@ -1,0 +1,402 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage{xepersian}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{color}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{amsmath}
+\defpersianfont\nastaliq{IranNastaliq.ttf}
+\settextfont[Scale = 1.0 ,
+BoldFont = *Bd ,
+ItalicFont = *It ,
+BoldItalicFont = *BdIt ,
+Extension = .ttf
+]{XB Yas} 
+
+\lstset{
+	frame=single,
+	breaklines=true,
+	numbers=left,
+	numberstyle=\tiny,
+	basicstyle=\ttfamily\small,
+	language=Python,
+	xleftmargin=0pt,           % Remove left margin
+	framexleftmargin=0pt,      % Remove frame margin
+	linewidth=\textwidth,      % Set width to text width
+	aboveskip=0pt,
+	belowskip=0pt,
+	resetmargins=true          % Important for Persian!
+}
+
+\title{گزارش پروژه موتور شطرنج با یادگیری عمیق و جستجوی درخت مونت کارلو}
+\author{دانشجو}
+\date{\today}
+\usepackage{xcolor}
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\begin{document}
+	
+
+	
+	\section{مقدمه}
+	هدف از این پروژه، طراحی و پیاده‌سازی یک موتور شطرنج با استفاده از یادگیری عمیق و الگوریتم جستجوی درخت مونت کارلو (MCTS) است. این موتور قادر است با استفاده از یک شبکه عصبی کانولوشن، موقعیت‌های صفحه شطرنج را ارزیابی کرده و با ترکیب آن با جستجوی 
+\lr{MCTS}
+	،
+	 سعی کند تا بهترین حرکت را انتخاب کند. داده‌های آموزش از پایگاه داده Lichess دریافت و پس از فیلتر کردن بر اساس ریتینگ بازیکنان، برای آموزش شبکه عصبی استفاده می‌شوند.
+	
+	\section{معماری شبکه عصبی}
+	شبکه عصبی طراحی شده از نوع کانولوشن با دو خروجی مجزا است: سر سیاست
+	\lr{ (Policy Head)}
+	  و سر ارزش
+	  \lr{(Value Head)}
+	 . این معماری مشابه شبکه‌های استفاده شده در موتورهای معروفی مثل AlphaZero است اما با ابعاد کوچک‌تر برای اجرا روی سخت‌افزار معمولی و برخلاف 
+	 \lr{AlphaZero}
+	 از 
+	 \lr{Supervised Learning}
+	 استفاده می‌شود.
+	
+	\subsection{ورودی شبکه}
+	ورودی شبکه یک تنسور 19×8×8 است که هر لایه آن اطلاعات متفاوتی از صفحه شطرنج را نمایش می‌دهد:
+	\begin{itemize}
+		\item کانال‌های 0-5: موقعیت مهره‌های سفید (پیاده، اسب، فیل، رخ، وزیر، شاه)
+		\item کانال‌های 6-11: موقعیت مهره‌های سیاه
+		\item کانال‌های 12-15: حق قلعه رفتن
+		\item کانال 16: خانه آن پاسان
+		\item کانال 17: نوبت حرکت
+		\item کانال 18: تکرار موقعیت
+	\end{itemize}
+	
+	\subsection{لایه‌های استخراج ویژگی}
+	شبکه شامل 4 لایه کانولوشن با مشخصات زیر است:
+	\\
+	\begin{latin}
+		\begin{lstlisting}[language=Python, xleftmargin=0pt, linewidth=\textwidth]
+self.features = nn.Sequential(
+nn.Conv2d(19, 128, 3, padding=1),
+nn.BatchNorm2d(128),
+nn.ReLU(inplace=True),
+nn.Dropout2d(0.3),
+
+nn.Conv2d(128, 128, 3, padding=1),
+nn.BatchNorm2d(128),
+nn.ReLU(inplace=True),
+nn.Dropout2d(0.3),
+
+nn.Conv2d(128, 128, 3, padding=1),
+nn.BatchNorm2d(128),
+nn.ReLU(inplace=True),
+nn.Dropout2d(0.3),
+
+nn.Conv2d(128, 128, 3, padding=1),
+nn.BatchNorm2d(128),
+nn.ReLU(inplace=True),
+nn.Dropout2d(0.3),
+)
+		\end{lstlisting}
+	\end{latin}
+	هر لایه کانولوشن از فیلترهای 3×3 با padding=1 استفاده می‌کند که باعث حفظ ابعاد 8×8 صفحه می‌شود. لایه‌های BatchNorm برای نرمال‌سازی و Dropout با نرخ
+	 \lr{0.3}
+	  برای جلوگیری از بیش‌برازش استفاده شده‌اند.
+	
+	\subsection{سر سیاست 
+		\lr{(Policy Head)}}
+	سر سیاست وظیفه پیش‌بینی بهترین حرکت در هر موقعیت را بر عهده دارد:
+	\\
+	\begin{latin}
+		\begin{lstlisting}[language=Python]
+self.policy = nn.Sequential(
+nn.Conv2d(128, 32, 1),
+nn.BatchNorm2d(32),
+nn.ReLU(inplace=True),
+nn.Flatten(),
+nn.Linear(32 * 64, 4096)
+)
+		\end{lstlisting}
+	\end{latin}
+	خروجی این سر یک بردار 4096 تایی است که هر عنصر نشان‌دهنده احتمال یک حرکت خاص است. تعداد 4096 از ضرب 64 (خانه مبدأ) در 64 (خانه مقصد) به دست آمده است.
+	
+	\subsection{سر ارزش
+		 \lr{(Value Head)}}
+	سر ارزش موقعیت را ارزیابی کرده و یک عدد بین -1 تا 1 برمی‌گرداند که نشان‌دهنده برتری سفید یا سیاه است:
+	\\
+	\begin{latin}
+		\begin{lstlisting}[language=Python]
+self.value = nn.Sequential(
+nn.Conv2d(128, 32, 1),
+nn.BatchNorm2d(32),
+nn.ReLU(inplace=True),
+nn.Flatten(),
+nn.Linear(32 * 64, 256),
+nn.ReLU(inplace=True),
+nn.Dropout(0.3),
+nn.Linear(256, 1),
+nn.Tanh()
+)
+		\end{lstlisting}
+	\end{latin}
+	\section{ارزیابی هیوریستیک}
+	برای برچسب‌زنی داده‌های آموزش بدون نیاز به موتور های شطرنج مانند
+	\lr{Stockfish}
+	، یک تابع ارزیابی هیوریستیک استفاده شده است که عوامل مختلفی را در نظر می‌گیرد:
+	\\
+	\subsection{ارزش مهره‌ها}
+	\begin{latin}
+		\begin{lstlisting}[language=Python]
+piece_values = {
+	chess.PAWN: 100, chess.KNIGHT: 320, chess.BISHOP: 330,
+	chess.ROOK: 500, chess.QUEEN: 900, chess.KING: 0
+}
+		\end{lstlisting}
+	\end{latin}
+	\subsection{جداول مکان مهره‌ها}
+	برای هر مهره، یک جدول 8×8 از امتیازات موقعیتی تعریف شده است. به عنوان مثال، جدول پیاده‌ها:
+	\\
+	\begin{latin}
+		\begin{lstlisting}[language=Python]
+pawn_table = [
+[0,  0,  0,  0,  0,  0,  0,  0],
+[50, 50, 50, 50, 50, 50, 50, 50],
+[10, 10, 20, 30, 30, 20, 10, 10],
+[5,  5, 10, 25, 25, 10,  5,  5],
+[0,  0,  0, 20, 20,  0,  0,  0],
+[0,  0,  0,  0,  0,  0,  0,  0],
+[0,  0,  0,  0,  0,  0,  0,  0],
+[0,  0,  0,  0,  0,  0,  0,  0] 
+]
+		\end{lstlisting}
+	\end{latin}
+	\subsection{سایر عوامل}
+	عوامل دیگری که در ارزیابی در نظر گرفته شده‌اند:
+	\begin{itemize}		
+		\item تحرک مهره‌ها (تعداد حرکات قانونی)
+		\item کنترل مرکز صفحه
+		\item ایمنی شاه و حق قلعه رفتن
+		\item سپر پیاده‌ای جلوی شاه
+	\end{itemize}
+	
+	نهایتاً امتیاز نهایی با تابع tanh نرمال‌سازی می‌شود:
+	\[
+	\text{value} = \tanh(\frac{\text{score}}{2000})
+	\]
+	
+	\section{جستجوی درخت مونت کارلو (MCTS)}
+	الگوریتم MCTS با ترکیب شبکه عصبی، جستجوی هوشمندانه‌ای برای یافتن بهترین حرکت انجام می‌دهد. این الگوریتم از 4 مرحله تشکیل شده است.
+	
+	\subsection{مراحل MCTS}
+	
+	\subsubsection{انتخاب (Selection)}
+	در این مرحله، با استفاده از فرمول PUTC، بهترین گره برای ادامه جستجو انتخاب می‌شود:
+	\[
+	\text{score} = Q(s,a) + c \times P(s,a) \times \frac{\sqrt{N(s)}}{1 + N(s,a)}
+	\]
+	
+	که در آن:
+	\begin{itemize}
+		\item \(Q(s,a)\): ارزش فعلی حرکت (نسبت برد به تعداد بازدیدها)
+		\item \(P(s,a)\): احتمال اولیه حرکت از شبکه عصبی
+		\item \(N(s)\): تعداد بازدیدهای گره والد
+		\item \(N(s,a)\): تعداد دفعاتی که این حرکت انتخاب شده
+		\item \(c\): ثابت اکتشاف (معمولاً 1.4)
+	\end{itemize}
+	
+	\subsubsection{بسط (Expansion)}
+	اگر گره انتخاب شده قبلاً بسط داده نشده باشد، تمام حرکات قانونی به عنوان فرزندان آن ایجاد می‌شوند. احتمال اولیه هر حرکت از خروجی Policy Head شبکه عصبی گرفته می‌شود.
+	
+	\subsubsection{ارزیابی (Evaluation)}
+	اگر گره به حالت پایان بازی رسیده باشد، نتیجه واقعی بازی برگردانده می‌شود. در غیر این صورت، شبکه عصبی برای ارزیابی موقعیت فراخوانی می‌شود و خروجی Value Head به عنوان ارزش موقعیت در نظر گرفته می‌شود.
+	
+	\subsubsection{بازگشت (Backup)}
+	ارزش به‌دست آمده در تمام گره‌های مسیر جستجو به‌روزرسانی می‌شود:
+	\begin{itemize}
+		\item تعداد بازدیدها (\(visits\)) یک واحد افزایش می‌یابد
+		\item مجموع ارزش‌ها (\(value\_sum\)) با ارزش جدید جمع می‌شود
+		\item برای گره‌های مربوط به حریف، علامت ارزش معکوس می‌شود
+	\end{itemize}
+	
+	\subsection{پیاده‌سازی MCTS}
+	کلاس‌های اصلی MCTS به صورت زیر پیاده‌سازی شده‌اند:
+	\\
+	\begin{latin}
+		\begin{lstlisting}[language=Python]
+class MCTSNode:
+	def __init__(self, board, parent=None, move=None, prior=0):
+		self.board = board
+		self.parent = parent
+		self.move = move
+		self.prior = prior
+		self.visits = 0
+		self.value_sum = 0
+		self.children = {}
+		self.is_expanded = False
+	
+	def value(self):
+		if self.visits == 0:
+			return 0
+		return self.value_sum / self.visits
+	
+	def ucb_score(self, exploration_constant=1.4):
+		if self.visits == 0:
+			return float('inf')
+		exploration = exploration_constant * self.prior * \
+		math.sqrt(self.parent.visits) / (1 + self.visits)
+		return self.value() + exploration
+		\end{lstlisting}
+	\end{latin}
+	
+	و کلاس اصلی MCTS:
+	\\
+	\begin{latin}
+		\begin{lstlisting}[language=Python]
+class MCTS:
+	def __init__(self, model, num_simulations=800):
+		self.model = model
+		self.num_simulations = num_simulations
+		self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+	
+	def search(self, board):
+		root = MCTSNode(board.copy())
+	
+		for _ in range(self.num_simulations):
+			node = root
+			path = [node]
+		
+		# Selection
+		while node.is_expanded and node.children:
+			node = self.select_child(node)
+			path.append(node)
+	
+		# Expansion
+		if not node.board.is_game_over() and not node.is_expanded:
+			self.expand(node)
+			node.is_expanded = True
+	
+		# Evaluation
+		if node.board.is_game_over():
+			value = self.get_game_result(node.board)
+		else:
+			value = self.evaluate(node.board)
+	
+		# Backup
+		for node in reversed(path):
+			node.visits += 1
+			node.value_sum += value
+			value = -value
+	
+		return root
+		\end{lstlisting}
+	\end{latin}
+	
+	\section{آماده‌سازی داده‌ها}
+	داده‌های آموزش از پایگاه داده Lichess دریافت می‌شوند. این پایگاه داده شامل میلیون‌ها بازی شطرنج با فرمت PGN است.
+	
+	\subsection{دریافت و فیلتر کردن فایل‌ها}
+	فایل‌های PGN با فرمت فشرده zst از آدرس \lr{https://database.lichess.org/} دریافت می‌شوند. در این پروژه از دو فایل استفاده شده است:
+	\begin{itemize}
+		\item \lr{lichess\_db\_standard\_rated\_2015-01.pgn.zst} برای آموزش
+		\item \lr{lichess\_db\_standard\_rated\_2013-01.pgn.zst} برای آزمون
+	\end{itemize}
+	
+	برای فیلتر کردن بر اساس ریتینگ، تابع \lr{safe\_elo} نوشته شده است.
+	
+	\subsection{استخراج موقعیت‌ها}
+	از هر بازی، تعدادی موقعیت تصادفی (پیش‌فرض 15موقعیت) استخراج می‌شود. برای هر موقعیت، موارد زیر ذخیره می‌گردد:
+	\begin{itemize}
+		\item تنسور صفحه شطرنج (19×8×8)
+		\item ارزش موقعیت از تابع ارزیابی هیوریستیک
+		\item حرکتی که در آن موقعیت انجام شده که با عنوان هدف 
+		\lr{policy}
+		از آن استفاده می‌شود.
+	\end{itemize}
+	
+	\subsection{ذخیره‌سازی دسته‌ای (Batch Saving)}
+	برای جلوگیری از مصرف بیش از حد حافظه، داده‌ها به صورت دسته‌های 5۰۰۰۰ تایی ذخیره می‌شوند:
+	\\
+	\begin{latin}
+		\begin{lstlisting}[language=Python]
+def save_batch(tensors, values, policies, prefix, batch_num):
+	X = torch.stack(tensors)
+	y_value = torch.tensor(values, dtype=torch.float32)
+	y_policy = torch.tensor(policies, dtype=torch.long)
+
+	filename = f"{prefix}_batch_{batch_num:04d}.pt"
+	torch.save({
+		'X': X,
+		'y_value': y_value,
+		'y_policy': y_policy,
+		'num_positions': len(tensors)
+	}, filename)
+		\end{lstlisting}
+	\end{latin}
+	
+	\section{آموزش مدل}
+	فرآیند آموزش با استفاده از بهینه‌ساز AdamW و تابع Loss ترکیبی انجام می‌شود.
+	
+	\subsection{تابع Loss}
+	تابع Loss از دو بخش تشکیل شده است:
+	\[
+	\mathcal{L} = \mathcal{L}_{\text{value}} + \mathcal{L}_{\text{policy}}
+	\]
+	
+	که در آن:
+	\begin{itemize}
+		\item \(\mathcal{L}_{\text{value}} = \text{MSE}(v_{\text{pred}}, v_{\text{target}})\) خطای میانگین مربعات برای سر ارزش
+		\item \(\mathcal{L}_{\text{policy}} = \text{CrossEntropy}(p_{\text{pred}}, p_{\text{target}})\) آنتروپی متقاطع برای سر سیاست
+	\end{itemize}
+	
+	\subsection{جلوگیری از بیش‌برازش}
+	برای جلوگیری از بیش‌برازش (Overfitting)، چندین روش استفاده شده است:
+	
+	\subsubsection{Dropout}
+	لایه‌های Dropout با نرخ
+	\lr{ 0.3}
+	 بعد از هر لایه فعال‌سازی قرار داده شده‌اند. Dropout به صورت تصادفی برخی نورون‌ها را در هر مرحله آموزش غیرفعال می‌کند و باعث می‌شود شبکه وابستگی کمتری به نورون‌های خاص پیدا کند.
+	
+	\subsubsection{Weight Decay}
+	در بهینه‌ساز AdamW از پارامتر weight\_decay با مقدار 1e-4 استفاده شده است. این کار یک جریمه به وزن‌های بزرگ اضافه می‌کند و باعث ساده‌تر شدن مدل می‌شود.
+	
+	\subsubsection{Early Stopping}
+	 در هر epoch  بهترین مدل بر اساس کمترین خطای اعتبارسنجی انتخاب می‌گردد و ذخیره می‌شود:
+	
+	\begin{latin}
+		\begin{lstlisting}[language=Python]
+if avg_val < best_val_loss:
+	best_val_loss = avg_val
+	torch.save(self.model.state_dict(), 
+		f"chess_model_BEST_val_{best_val_loss:.4f}.pth")
+		\end{lstlisting}
+	\end{latin}
+	
+	\section{اجرای برنامه}
+	برنامه دارای یک منوی تعاملی با گزینه‌های زیر است:
+	
+	\begin{latin}
+		\begin{verbatim}
+			Options:
+			1. Train model
+			2. Load existing model
+			3. Play against engine
+			4. Watch engine vs random
+			5. Watch engine self-play
+			6. Exit
+		\end{verbatim}
+	\end{latin}
+	
+	\subsection{آماده‌سازی داده‌ها}
+	برای آماده‌سازی داده‌ها، اسکریپت \lr{data.py} اجرا می‌شود.
+	
+	این اسکریپت فایل‌های zst را پردازش کرده و فایل‌های دسته‌ای با نام \lr{chess\_data\_batch\_*.pt} را در ایجاد میکند، که برای یادگیری استفاده می‌شوند.
+	
+	\subsection{آموزش مدل}
+	پس از آماده‌سازی داده‌ها، با انتخاب گزینه 1 از منو و وارد کردن پارامترهای آموزش، فرآیند آموزش آغاز می‌شود. در طول آموزش، مدل‌ها با نام‌های زیر ذخیره می‌شوند:
+	\begin{itemize}
+		\item \lr{chess\_model\_val\_2.3456\_epoch\_1.pth}
+		\item \lr{chess\_model\_val\_2.1234\_epoch\_2.pth}
+		\item \lr{chess\_model\_BEST\_val\_1.8765.pth} (بهترین مدل)
+	\end{itemize}
+	
+	\subsection{بازی با موتور}
+	با انتخاب گزینه‌های 3 تا 5 می‌توان با موتور بازی کرد یا آن را در مقابل حرکات تصادفی مشاهده نمود. موتور با انجام 800 شبیه‌سازی MCTS برای هر حرکت، بهترین حرکت را انتخاب می‌کند.
+\end{document}
