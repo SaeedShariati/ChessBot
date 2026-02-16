@@ -1,4 +1,3 @@
-# prepare_chess_data.py
 import zstandard as zstd
 import chess
 import chess.pgn
@@ -10,10 +9,6 @@ import random
 import os
 import glob
 from multiprocessing import Pool, cpu_count
-
-# ============================================
-# PART 1: YOUR EXISTING FUNCTIONS
-# ============================================
 
 def safe_elo(elo_str):
     """Convert ELO safely"""
@@ -78,7 +73,7 @@ def enhanced_evaluate(board):
     Returns value between -1 and 1
     """
     if board.is_checkmate():
-        return -10000.0 if board.turn == chess.WHITE else 10000.0
+        return -1.0 if board.turn == chess.WHITE else 1.0
     if board.is_stalemate() or board.is_insufficient_material():
         return 0.0
     
@@ -243,160 +238,17 @@ def enhanced_evaluate(board):
     
     # Normalize to [-1, 1]
     return np.tanh(score / 1000.0)
-def move_to_index(move):
-    """Convert move to index (simplified but works)"""
-    return move.from_square * 64 + move.to_square
 
-def process_file_batched(zst_path, min_elo=1500, max_positions=500000, 
-                         batch_size=10000, output_prefix="chess_data"):
-    """
-    Process file and save in batches
-    """
-    print(f"\nProcessing {zst_path}...")
+def test_evaluation():
+    # Position where white is up a queen
+    board = chess.Board("4k3/8/8/8/8/8/8/4K2Q w - - 0 1")
+    value = enhanced_evaluate(board)
+    print(f"White up a queen: {value}")  # Should be ~0.9
     
-    current_X = []
-    current_V = []
-    current_P = []
-    batch_num = 0
-    total_positions = 0
-    
-    with open(zst_path, 'rb') as f:
-        dctx = zstd.ZstdDecompressor()
-        with dctx.stream_reader(f) as reader:
-            text_stream = io.TextIOWrapper(reader, encoding='utf-8')
-            
-            games_processed = 0
-            games_kept = 0
-            
-            while total_positions < max_positions:
-                game = chess.pgn.read_game(text_stream)
-                if game is None:
-                    break
-                
-                games_processed += 1
-                
-                # Check ELO
-                white_elo = safe_elo(game.headers.get('WhiteElo'))
-                black_elo = safe_elo(game.headers.get('BlackElo'))
-                
-                if white_elo >= min_elo and black_elo >= min_elo:
-                    games_kept += 1
-                    
-                    board = game.board()
-                    moves = list(game.mainline_moves())
-                    
-                    if len(moves) < 2:
-                        continue
-                    
-                    # Take random positions from this game
-                    num_samples = min(15, len(moves) - 1)
-                    sample_indices = sorted(random.sample(range(len(moves) - 1), num_samples))
-                    
-                    for i in sample_indices:
-                        # Get position
-                        pos_board = game.board()
-                        for move in moves[:i]:
-                            pos_board.push(move)
-                        
-                        # Get next move
-                        next_move = moves[i]
-                        
-                        # Add to batch
-                        current_X.append(board_to_tensor(pos_board))
-                        current_V.append(enhanced_evaluate(pos_board))
-                        current_P.append(move_to_index(next_move))
-                        
-                        total_positions += 1
-                        
-                        # Save if batch is full
-                        if len(current_X) >= batch_size:
-                            save_batch(current_X, current_V, current_P, 
-                                      output_prefix, batch_num)
-                            batch_num += 1
-                            current_X = []
-                            current_V = []
-                            current_P = []
-                        
-                        if total_positions >= max_positions:
-                            break
-                
-                # Progress
-                if games_processed % 100 == 0:
-                    print(f"\rGames: {games_kept}/{games_processed} | "
-                          f"Positions: {total_positions}/{max_positions} | "
-                          f"Batch: {len(current_X)}/{batch_size}", end="")
-    
-    # Save final batch
-    if current_X:
-        save_batch(current_X, current_V, current_P, output_prefix, batch_num)
-        batch_num += 1
-    
-    print(f"\n\n Done! Saved {total_positions} positions in {batch_num} batches")
-    return batch_num
+    # Equal material
+    board = chess.Board("4k3/8/8/8/8/8/8/4K3 w - - 0 1")
+    value = enhanced_evaluate(board)
+    print(f"Equal material: {value}")  # Should be ~0.0
 
-def save_batch(tensors, values, policies, prefix, batch_num):
-    """Save a single batch to disk"""
-    print(f"\n Saving batch {batch_num} with {len(tensors)} positions...")
-    
-    # Stack tensors
-    X = torch.stack(tensors)
-    y_value = torch.tensor(values, dtype=torch.float32)
-    y_policy = torch.tensor(policies, dtype=torch.long)
-    
-    # Save
-    filename = f"./chess_data/{prefix}_batch_{batch_num:04d}.pt"
-    torch.save({
-        'X': X,
-        'y_value': y_value,
-        'y_policy': y_policy,
-        'num_positions': len(tensors)
-    }, filename)
-    
-    print(f"   Saved to {filename}")
-    return filename
-def prepare_training_data(positions_data):
-    """
-    Convert (board, next_move) pairs to tensors with evaluations
-    """
-    print("Converting to tensors and evaluating...")
-    
-    X = []
-    y_value = []
-    y_policy = []
-    
-    for board, next_move in tqdm(positions_data):
-        X.append(board_to_tensor(board))
-        y_value.append(enhanced_evaluate(board))
-        y_policy.append(move_to_index(next_move))
-    
-    # Stack tensors
-    X = torch.stack(X)
-    y_value = torch.tensor(y_value, dtype=torch.float32)
-    y_policy = torch.tensor(y_policy, dtype=torch.long)
-    
-    return X, y_value, y_policy
 
-# ============================================
-# MAIN
-# ============================================
-
-if __name__ == "__main__":
-    MIN_ELO = 1500
-    MAX_POSITIONS = [10000000,100000]  # Total positions to collect
-    
-    files = [
-        "lichess_db_standard_rated_2015-01.pgn.zst",
-        "lichess_db_standard_rated_2013-01.pgn.zst",
-    ]
-    i=0
-    for file in files:
-        if os.path.exists(file):
-            process_file_batched(
-                file, 
-                min_elo=MIN_ELO,
-                max_positions=MAX_POSITIONS[i],
-                batch_size=50000,
-                output_prefix="chess_data"
-            )
-        i=i+1
-    print(f"\n Done! Saved ")
+test_evaluation()

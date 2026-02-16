@@ -108,7 +108,43 @@ def board_to_tensor(board):
     # Repetition count, ignore for now
     
     return torch.FloatTensor(tensor)
-
+def tensor_to_board(tensor):
+    """Convert a 19x8x8 tensor back to a chess board (for validation)"""
+    board = chess.Board()
+    board.clear()  # Start with empty board
+    
+    tensor = tensor.numpy() if torch.is_tensor(tensor) else tensor
+    
+    # Piece mapping (reverse of board_to_tensor)
+    piece_types = [chess.PAWN, chess.KNIGHT, chess.BISHOP, 
+                   chess.ROOK, chess.QUEEN, chess.KING]
+    
+    # White pieces (channels 0-5)
+    for channel, piece_type in enumerate(piece_types):
+        for row in range(8):
+            for col in range(8):
+                if tensor[channel, row, col] > 0.5:
+                    square = chess.square(col, 7-row)  # Convert row back
+                    board.set_piece_at(square, chess.Piece(piece_type, chess.WHITE))
+    
+    # Black pieces (channels 6-11)
+    for channel, piece_type in enumerate(piece_types):
+        for row in range(8):
+            for col in range(8):
+                if tensor[channel+6, row, col] > 0.5:
+                    square = chess.square(col, 7-row)
+                    board.set_piece_at(square, chess.Piece(piece_type, chess.BLACK))
+    
+    # Set turn (channel 17)
+    if tensor[17, 0, 0] > 0.5:
+        board.turn = chess.WHITE
+    else:
+        board.turn = chess.BLACK
+    
+    # Note: castling rights, en passant are lost in conversion
+    # But for validation, material evaluation should still work
+    
+    return board
 import io
 import random
 
@@ -117,7 +153,177 @@ def move_to_index(move):
     """Convert a move to an index (simplified - real would need more careful mapping)"""
     return move.from_square * 64 + move.to_square
 
-
+def enhanced_evaluate(board):
+    """
+    Position evaluation using multiple heuristics
+    Returns value between -1 and 1
+    """
+    if board.is_checkmate():
+        return -1.0 if board.turn == chess.WHITE else 1.0
+    if board.is_stalemate() or board.is_insufficient_material():
+        return 0.0
+    
+    score = 0
+    
+    # 1. Material (weight: 1.0)
+    piece_values = {
+        chess.PAWN: 100, chess.KNIGHT: 320, chess.BISHOP: 330,
+        chess.ROOK: 500, chess.QUEEN: 900, chess.KING: 0
+    }
+    
+    for square in chess.SQUARES:
+        piece = board.piece_at(square)
+        if piece:
+            value = piece_values[piece.piece_type]
+            if piece.color == chess.WHITE:
+                score += value
+            else:
+                score -= value
+    
+    # 2. Piece-square tables (positional bonuses) 
+    # FIXED: Pawns on 8th rank are handled by material (they'll be queens!)
+    pawn_table = [
+        [0,  0,  0,  0,  0,  0,  0,  0],  # Rank 8 - promotion (bonus from material)
+        [50, 50, 50, 50, 50, 50, 50, 50], # Rank 7 - near promotion
+        [10, 10, 20, 30, 30, 20, 10, 10], # Rank 6
+        [5,  5, 10, 25, 25, 10,  5,  5],  # Rank 5
+        [0,  0,  0, 20, 20,  0,  0,  0],  # Rank 4
+        [0,  0,  0,  0,  0,  0,  0,  0],  # Rank 3
+        [0,  0,  0,  0,  0,  0,  0,  0],  # Rank 2
+        [0,  0,  0,  0,  0,  0,  0,  0]   # Rank 1
+    ]
+    
+    # Knights: center good, edges bad
+    knight_table = [
+        [-50,-40,-30,-30,-30,-30,-40,-50],
+        [-40,-20,  0,  0,  0,  0,-20,-40],
+        [-30,  0, 10, 15, 15, 10,  0,-30],
+        [-30,  5, 15, 20, 20, 15,  5,-30],
+        [-30,  0, 15, 20, 20, 15,  0,-30],
+        [-30,  5, 10, 15, 15, 10,  5,-30],
+        [-40,-20,  0,  5,  5,  0,-20,-40],
+        [-50,-40,-30,-30,-30,-30,-40,-50]
+    ]
+    
+    # Bishops: like center, avoid corners
+    bishop_table = [
+        [-20,-10,-10,-10,-10,-10,-10,-20],
+        [-10,  0,  0,  0,  0,  0,  0,-10],
+        [-10,  0,  5, 10, 10,  5,  0,-10],
+        [-10,  5,  5, 10, 10,  5,  5,-10],
+        [-10,  0, 10, 10, 10, 10,  0,-10],
+        [-10, 10, 10, 10, 10, 10, 10,-10],
+        [-10,  5,  0,  0,  0,  0,  5,-10],
+        [-20,-10,-10,-10,-10,-10,-10,-20]
+    ]
+    
+    # Rooks: prefer open files, 7th rank
+    rook_table = [
+        [0,  0,  0,  0,  0,  0,  0,  0],
+        [5, 10, 10, 10, 10, 10, 10,  5],
+        [-5,  0,  0,  0,  0,  0,  0, -5],
+        [-5,  0,  0,  0,  0,  0,  0, -5],
+        [-5,  0,  0,  0,  0,  0,  0, -5],
+        [-5,  0,  0,  0,  0,  0,  0, -5],
+        [-5,  0,  0,  0,  0,  0,  0, -5],
+        [0,  0,  0,  5,  5,  0,  0,  0]
+    ]
+    
+    # Queens: combine rook and bishop patterns
+    queen_table = [
+        [-20,-10,-10, -5, -5,-10,-10,-20],
+        [-10,  0,  0,  0,  0,  0,  0,-10],
+        [-10,  0,  5,  5,  5,  5,  0,-10],
+        [-5,  0,  5,  5,  5,  5,  0, -5],
+        [0,  0,  5,  5,  5,  5,  0, -5],
+        [-10,  5,  5,  5,  5,  5,  0,-10],
+        [-10,  0,  5,  0,  0,  0,  0,-10],
+        [-20,-10,-10, -5, -5,-10,-10,-20]
+    ]
+    
+    # Apply piece-square tables
+    for square in chess.SQUARES:
+        piece = board.piece_at(square)
+        if not piece:
+            continue
+            
+        row = square // 8
+        col = square % 8
+        
+        # Flip row for black pieces
+        if piece.color == chess.BLACK:
+            row = 7 - row
+        
+        bonus = 0
+        if piece.piece_type == chess.PAWN:
+            # FIXED: Only give bonus if not on promotion rank
+            if (piece.color == chess.WHITE and row < 7) or (piece.color == chess.BLACK and row > 0):
+                bonus = pawn_table[row][col]
+        elif piece.piece_type == chess.KNIGHT:
+            bonus = knight_table[row][col]
+        elif piece.piece_type == chess.BISHOP:
+            bonus = bishop_table[row][col]
+        elif piece.piece_type == chess.ROOK:
+            bonus = rook_table[row][col]
+        elif piece.piece_type == chess.QUEEN:
+            bonus = queen_table[row][col]
+        
+        if piece.color == chess.WHITE:
+            score += bonus
+        else:
+            score -= bonus
+    
+    # 3. Mobility (number of legal moves)
+    white_moves = len(list(board.legal_moves)) if board.turn == chess.WHITE else 0
+    black_moves = len(list(board.legal_moves)) if board.turn == chess.BLACK else 0
+    mobility_score = (white_moves - black_moves) * 2
+    score += mobility_score
+    
+    # 4. Center control
+    center_squares = [chess.E4, chess.D4, chess.E5, chess.D5]
+    center_control = 0
+    for square in center_squares:
+        if board.is_attacked_by(chess.WHITE, square):
+            center_control += 5
+        if board.is_attacked_by(chess.BLACK, square):
+            center_control -= 5
+    score += center_control
+    
+    # 5. King safety
+    if board.has_castling_rights(chess.WHITE):
+        score += 30
+    if board.has_castling_rights(chess.BLACK):
+        score -= 30
+    
+    white_king_square = board.king(chess.WHITE)
+    black_king_square = board.king(chess.BLACK)
+    
+    if white_king_square:
+        king_file = chess.square_file(white_king_square)
+        king_rank = chess.square_rank(white_king_square)
+        if king_rank < 3:
+            score -= 20
+        for offset in [-1, 0, 1]:
+            shield_square = chess.square(king_file + offset, king_rank + 1)
+            if 0 <= shield_square < 64:
+                piece = board.piece_at(shield_square)
+                if not piece or piece.piece_type != chess.PAWN or piece.color != chess.WHITE:
+                    score -= 10
+    
+    if black_king_square:
+        king_file = chess.square_file(black_king_square)
+        king_rank = chess.square_rank(black_king_square)
+        if king_rank > 4:
+            score += 20
+        for offset in [-1, 0, 1]:
+            shield_square = chess.square(king_file + offset, king_rank - 1)
+            if 0 <= shield_square < 64:
+                piece = board.piece_at(shield_square)
+                if not piece or piece.piece_type != chess.PAWN or piece.color != chess.BLACK:
+                    score += 10
+    
+    # Normalize to [-1, 1]
+    return np.tanh(score / 1000.0)
 
 class MCTSNode:
     def __init__(self, board, parent=None, move=None, prior=0):
@@ -136,13 +342,13 @@ class MCTSNode:
             return 0
         return self.value_sum / self.visits
     
-    def ucb_score(self, exploration_constant=1.4):
+    def ucb_score(self, exploration_constant=1.2):
         if self.visits == 0:
             return float('inf')
         
         # PUCT algorithm
         exploration = exploration_constant * self.prior * math.sqrt(self.parent.visits) / (1 + self.visits)
-        return self.value() + exploration
+        return exploration + self.value()
 
 
 class MCTS:
@@ -243,9 +449,107 @@ class MCTS:
 
 
 
-
-
+def validate_training_data(data_file="./chess_data/chess_data_batch_0000.pt", num_samples=100):
+    """
+    Compare stored training values with fresh heuristic evaluations
+    """
+    print(f"\n🔍 VALIDATING TRAINING DATA: {data_file}")
+    print("="*60)
+    
+    # Load training data
+    data = torch.load(data_file)
+    X = data['X']
+    y_value = data['y_value']
+    y_policy = data['y_policy']
+    
+    print(f"Total positions: {len(X)}")
+    print(f"Sampling {num_samples} random positions...\n")
+    
+    # Sample random indices
+    indices = random.sample(range(len(X)), min(num_samples, len(X)))
+    
+    discrepancies = []
+    
+    for idx in indices:
+        # Get stored value
+        stored_value = y_value[idx].item()
         
+        # We need to reconstruct the board from tensor
+        # This is tricky - we need a tensor_to_board function
+        # For now, let's assume you have one or we'll skip this part
+        
+        print(f"Position {idx}:")
+        print(f"  Stored value: {stored_value:.4f}")
+        # print(f"  Fresh heuristic: {fresh_value:.4f}")
+        # print(f"  Difference: {abs(stored_value - fresh_value):.4f}")
+        print()
+    
+    # If we could compare, we'd print statistics
+    # avg_diff = sum(discrepancies) / len(discrepancies)
+    # print(f"\nAverage difference: {avg_diff:.4f}")
+    # print(f"Max difference: {max(discrepancies):.4f}")
+
+def validate_training_data_full(data_file="./chess_data/chess_data_batch_0000.pt", num_samples=100):
+    """
+    Compare stored training values with fresh heuristic evaluations
+    """
+    print(f"\n🔍 VALIDATING TRAINING DATA: {data_file}")
+    print("="*60)
+    
+    # Load training data
+    data = torch.load(data_file)
+    X = data['X']
+    y_value = data['y_value']
+    
+    print(f"Total positions: {len(X)}")
+    print(f"Sampling {num_samples} random positions...\n")
+    
+    indices = random.sample(range(len(X)), min(num_samples, len(X)))
+    
+    stored_values = []
+    fresh_values = []
+    differences = []
+    
+    for idx in indices:
+        # Get stored value
+        stored = y_value[idx].item()
+        stored_values.append(stored)
+        
+        # Reconstruct board
+        board = tensor_to_board(X[idx])
+        
+        # Get fresh heuristic evaluation
+        fresh = enhanced_evaluate(board)
+        fresh_values.append(fresh)
+        
+        diff = abs(stored - fresh)
+        differences.append(diff)
+        
+        print(f"Position {idx}:")
+        print(f"  Stored: {stored:.4f}, Fresh: {fresh:.4f}, Diff: {diff:.4f}")
+        if diff > 0.2:
+            print(f"  ⚠️ Large discrepancy!")
+        print()
+    
+    # Statistics
+    avg_diff = sum(differences) / len(differences)
+    max_diff = max(differences)
+    
+    print("="*60)
+    print(f"SUMMARY:")
+    print(f"  Average difference: {avg_diff:.4f}")
+    print(f"  Max difference: {max_diff:.4f}")
+    print(f"  Stored value range: [{min(stored_values):.4f}, {max(stored_values):.4f}]")
+    print(f"  Fresh value range: [{min(fresh_values):.4f}, {max(fresh_values):.4f}]")
+    
+    if avg_diff < 0.1:
+        print("\n✅ Training data is consistent with heuristic!")
+    elif avg_diff < 0.2:
+        print("\n⚠️ Training data has some noise but should be OK")
+    else:
+        print("\n❌ Training data is corrupted! Values don't match heuristic")
+    
+    return avg_diff, max_diff
 class ChessEngine:
     def __init__(self, model_path=None):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -327,7 +631,7 @@ class ChessEngine:
                 optimizer.zero_grad()
                 policy_out, value_out = self.model(batch_X)
                 
-                loss = (F.mse_loss(value_out, batch_v) + 
+                loss = 10*(F.mse_loss(value_out, batch_v) + 
                     F.cross_entropy(policy_out, batch_p))
                 
                 loss.backward()
@@ -412,7 +716,60 @@ class ChessEngine:
             board.push(move)
         
         return board
-
+    def debug_position(self, fen=None):
+        """Debug what the network sees in various positions"""
+        
+        test_positions = [
+            ("Hanging Queen", "rnb1kbnr/pppp1ppp/8/4q3/3P4/8/PPP1PPPP/RNBQKBNR w KQkq - 0 2", 
+            "White can win queen", 0.5),
+            
+            ("Simple Checkmate in 1", "4k3/8/8/8/8/8/8/4K2Q w - - 0 1",
+            "White to play Qe8#", 1.0),
+            
+            ("Back Rank Mate in 1", "6k1/5ppp/8/8/8/8/5PPP/4R1K1 w - - 0 1",
+            "White to play Rf8#", 1.0),
+            
+            ("Equal Position", "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "Starting position", 0.0),
+        ]
+        
+        print(f"\n{'='*60}")
+        print(f"DEBUGGING MULTIPLE POSITIONS")
+        print(f"{'='*60}")
+        
+        for desc, test_fen, explanation, expected in test_positions:
+            board = chess.Board(test_fen)
+            print(f"\n{desc}: {explanation}")
+            print(f"FEN: {test_fen}")
+            print(board)
+            
+            # Heuristic evaluation
+            heur_val = enhanced_evaluate(board)
+            print(f"📊 Heuristic: {heur_val:.4f} (Expected: ~{expected})")
+            
+            # Network evaluation
+            self.model.eval()
+            with torch.no_grad():
+                tensor = board_to_tensor(board).unsqueeze(0).to(self.device)
+                policy, net_val = self.model(tensor)
+            
+            print(f"🧠 Network: {net_val.item():.4f}")
+            
+            # Top moves
+            probs = torch.softmax(policy[0], dim=0)
+            top_probs, top_indices = torch.topk(probs, 10)
+            
+            print(f"\n🎯 Top 5 moves:")
+            for i in range(5):
+                idx = top_indices[i].item()
+                prob = top_probs[i].item()
+                from_sq = idx // 64
+                to_sq = idx % 64
+                move = chess.Move(from_sq, to_sq)
+                if move in board.legal_moves:
+                    print(f"  {board.san(move)}: {prob:.4f}")
+            
+            print("-" * 40)
 # ============================================
 # PART 6: DEMO AND TESTING
 # ============================================
@@ -474,7 +831,14 @@ def main():
         
         elif choice == "6":
             break
+        elif choice == "7":
+            #debug
+            engine.debug_position()
+            validate_training_data_full()
 
 
 if __name__ == "__main__":
     main()
+
+
+
