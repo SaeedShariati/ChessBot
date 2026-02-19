@@ -1,4 +1,3 @@
-# prepare_chess_data.py
 import zstandard as zstd
 import chess
 import chess.pgn
@@ -9,12 +8,6 @@ from tqdm import tqdm
 import random
 import os
 import glob
-from multiprocessing import Pool, cpu_count
-
-# ============================================
-# PART 1: YOUR EXISTING FUNCTIONS
-# ============================================
-
 def safe_elo(elo_str):
     """Convert ELO safely"""
     try:
@@ -65,11 +58,7 @@ def board_to_tensor(board):
     # Turn (channel 17) - 1 for white, 0 for black stored as 1 in channel 17 if white's turn
     if board.turn == chess.WHITE:
         tensor[17, :, :] = 1.0
-    
-    # Repetition count (channel 18) - simplified, just check if position repeated
-    # For simplicity, we'll set this to 0 most of the time
-    # In a real implementation, you'd track repetitions
-    
+
     return torch.FloatTensor(tensor)
 
 def enhanced_evaluate(board):
@@ -100,7 +89,6 @@ def enhanced_evaluate(board):
                 score -= value
     
     # 2. Piece-square tables (positional bonuses) 
-    # FIXED: Pawns on 8th rank are handled by material (they'll be queens!)
     pawn_table = [
         [0,  0,  0,  0,  0,  0,  0,  0],  # Rank 8 - promotion (bonus from material)
         [50, 50, 50, 50, 50, 50, 50, 50], # Rank 7 - near promotion
@@ -376,13 +364,10 @@ def prepare_training_data(positions_data):
     
     return X, y_value, y_policy
 
-# ============================================
-# MAIN
-# ============================================
 
 if __name__ == "__main__":
-    MIN_ELO = 1500
-    MAX_POSITIONS = [10000000,100000]  # Total positions to collect
+    MIN_ELO = 1600
+    MAX_POSITIONS = [10000000,500000]  # Total positions to collect
     
     files = [
         "lichess_db_standard_rated_2015-01.pgn.zst",
