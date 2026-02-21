@@ -515,7 +515,7 @@ class ChessEngine:
         # Training setup
         device = self.device
         self.model = self.model.to(device)
-        if optimizer==None:
+        if self.optimizer==None:
             self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=0.001, weight_decay=1e-4)
         
         print(f"\nStarting training for {epochs} epochs...")
@@ -532,14 +532,14 @@ class ChessEngine:
                 batch_v = batch_v.to(device).unsqueeze(1)
                 batch_p = batch_p.to(device)
                 
-                optimizer.zero_grad()
+                self.optimizer.zero_grad()
                 policy_out, value_out = self.model(batch_X)
                 
                 loss = (F.mse_loss(value_out, batch_v) + 
                     F.cross_entropy(policy_out, batch_p))
                 
                 loss.backward()
-                optimizer.step()
+                self.optimizer.step()
                 
                 train_loss += loss.item()
                 train_batches += 1
@@ -576,7 +576,7 @@ class ChessEngine:
                 # Save a copy as the best model
                 torch.save({    'epoch': epoch,
                                 'model_state_dict': self.model.state_dict(),
-                                'optimizer_state_dict': optimizer.state_dict(),
+                                'optimizer_state_dict': self.optimizer.state_dict(),
                                 'best_val_loss': self.best_val_loss}, 
                                 best_filename)
                 print(f"Epoch {epoch+1}: Train Loss: {avg_train:.4f}, Val Loss: (value:{avg_value_loss:.4f}+policy:{avg_policy_loss:.4f})={avg_val:.4f} ✓ BEST SO FAR")
@@ -876,6 +876,7 @@ def main():
                 optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
                 engine.optimizer=optimizer
                 engine.best_val_loss= checkpoint.get('best_val_loss', float('inf'))
+                print(f"Network: {engine.best_val_loss:.4f}")
                 #engine.model.load_state_dict(torch.load(model_path, map_location=engine.device))
                 print("Model loaded")
             else:
