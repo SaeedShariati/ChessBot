@@ -4,3 +4,9 @@ chess_training_data.pt
 lichess_db_standard_rated_2013-01.pgn.zst
 lichess_db_standard_rated_2015-01.pgn.zst
 *.pth
+report/report.out
+report/report.aux
+report/report.log
+report/report.synctex.gz
+puzzle_data/*
+*.zst
