@@ -1,6 +1,7 @@
 import zstandard as zstd
 import chess
 import chess.pgn
+import csv
 import io
 import torch
 import numpy as np
@@ -236,7 +237,7 @@ def move_to_index(move):
     return move.from_square * 64 + move.to_square
 
 def process_file_batched(zst_path, min_elo=1500, max_positions=500000, 
-                         batch_size=10000, output_prefix="chess_data"):
+                         batch_size=10000, output_prefix="chess_data",batch_num=0):
     """
     Process file and save in batches
     """
@@ -245,7 +246,6 @@ def process_file_batched(zst_path, min_elo=1500, max_positions=500000,
     current_X = []
     current_V = []
     current_P = []
-    batch_num = 0
     total_positions = 0
     
     with open(zst_path, 'rb') as f:
@@ -319,7 +319,7 @@ def process_file_batched(zst_path, min_elo=1500, max_positions=500000,
         save_batch(current_X, current_V, current_P, output_prefix, batch_num)
         batch_num += 1
     
-    print(f"\n\n Done! Saved {total_positions} positions in {batch_num} batches")
+    print(f"\n\n Done! Saved {total_positions} positions,there are {batch_num} batches")
     return batch_num
 
 def save_batch(tensors, values, policies, prefix, batch_num):
@@ -363,7 +363,49 @@ def prepare_training_data(positions_data):
     y_policy = torch.tensor(y_policy, dtype=torch.long)
     
     return X, y_value, y_policy
+def process_puzzle_csv(zst_path, max_positions=500000, batch_size=50000, output_prefix="chess_puzzle",batch_num=0):
+    print(f"\nProcessing {zst_path}...")
+    X_list, y_value_list, y_policy_list = [], [], []
+    total_positions = 0
 
+    with open(zst_path, 'rb') as f:
+        dctx = zstd.ZstdDecompressor()
+        with dctx.stream_reader(f) as reader:
+            text_stream = io.TextIOWrapper(reader, encoding='utf-8')
+            csv_reader = csv.DictReader(text_stream)
+            
+            for row in tqdm(csv_reader):
+                fen = row['FEN']
+                solution_moves = row['Moves']  # moves separated by space
+                if not solution_moves:
+                    continue
+                moves = solution_moves.split()
+                board = chess.Board(fen)
+                for i in range(0,len(moves)-1):
+                    # Push previous moves in the tactic sequence
+                    board.push_uci(moves[i])
+                    
+                    target_move = chess.Move.from_uci(moves[i+1])
+                    
+                    # Add to batch
+                    X_list.append(board_to_tensor(board))
+                    y_policy_list.append(move_to_index(target_move))
+                    y_value_list.append(enhanced_evaluate(board))  # every step in tactic considered winning
+                    
+                    total_positions += 1
+                    
+                    # Save batch if full
+                    if len(X_list) >= batch_size:
+                        save_batch(X_list, y_value_list, y_policy_list, output_prefix, batch_num)
+                        batch_num += 1
+                        X_list, y_value_list, y_policy_list = [], [], []
+                    
+                    if total_positions >= max_positions:
+                        break
+                if total_positions >= max_positions:
+                    break
+    print(f"\n\n Done! Saved {total_positions} positions, there are {batch_num} batches")
+    return batch_num
 
 if __name__ == "__main__":
     MIN_ELO = 1600
@@ -373,15 +415,27 @@ if __name__ == "__main__":
         "lichess_db_standard_rated_2015-01.pgn.zst",
         "lichess_db_standard_rated_2013-01.pgn.zst",
     ]
+    num = 0
     i=0
     for file in files:
         if os.path.exists(file):
-            process_file_batched(
+            num= process_file_batched(
                 file, 
                 min_elo=MIN_ELO,
                 max_positions=MAX_POSITIONS[i],
                 batch_size=50000,
-                output_prefix="chess_data"
+                output_prefix="chess_data",
+                batch_num=num
             )
         i=i+1
     print(f"\n Done! Saved ")
+
+
+    puzzles_file = "lichess_db_puzzle.csv.zst"
+    process_puzzle_csv(
+        puzzles_file,
+        max_positions=500000,
+        batch_size=50000,
+        output_prefix="chess_data",
+        batch_num = num
+    )
