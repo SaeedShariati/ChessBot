@@ -162,12 +162,8 @@ def tensor_to_board(tensor):
     # But for validation, material evaluation should still work
     
     return board
-
-
-
 def move_to_index(move):
     return move.from_square * 64 + move.to_square
-
 def enhanced_evaluate(board):
     """
     Position evaluation using multiple heuristics
@@ -586,7 +582,6 @@ class ChessEngine:
         print(f"\nTraining complete!")
         print(f"Best validation loss: {self.best_val_loss:.4f}")
         print(f"Best model saved as: chess_model_BEST_val_{self.best_val_loss:.4f}.pth")
-    # Keep your existing play_move and play_game methods
     def play_move(self, board, num_simulations=800):
         if self.mcts is None:
             self.mcts = MCTS(self.model, num_simulations)
@@ -862,7 +857,7 @@ def main():
             batch_size = 64
             
             engine.train_from_batches(
-                data_prefix="chess_data",  # This matches your batch files: chess_data_batch_*.pt
+                data_prefix="chess_data",  # {chess_data}_batch_*.pt
                 epochs=epochs,
                 batch_size=batch_size
             )
