@@ -7,6 +7,28 @@
 \usepackage{algorithm}
 \usepackage{algpseudocode}
 \usepackage{amsmath}
+\usepackage{xskak}
+\usepackage{chessboard}
+\usepackage{minted}
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta}
+\usepackage{import}
+\usepackage{natbib}   % or biblatex
+\subimport{./Architecture_Graph/plotNeuralNet/layers/}{init}
+\usetikzlibrary{positioning}
+
+\def\ConvColor{rgb:yellow,5;red,2.5;white,5}
+\def\ConvReluColor{rgb:yellow,5;red,5;white,5}
+\def\PoolColor{rgb:red,1;black,0.3}
+\def\DcnvColor{rgb:blue,5;green,2.5;white,5}
+\def\SoftmaxColor{rgb:magenta,5;black,7}
+\def\SumColor{rgb:blue,5;green,15}
+\def\skipshift{6.5}
+\def\poolsep{1}
+\def\sep{3}
+\def\cwidth{3}
+\def\FcColor{rgb:blue,5;red,2.5;white,5}
+\def\FcReluColor{rgb:blue,5;red,5;white,4}
 \defpersianfont\nastaliq{IranNastaliq.ttf}
 \settextfont[Scale = 1.0 ,
 BoldFont = *Bd ,
@@ -31,16 +53,12 @@ Extension = .ttf
 }
 
 \title{گزارش پروژه موتور شطرنج با یادگیری عمیق و جستجوی درخت مونت کارلو}
-\author{دانشجو}
-\date{\today}
 \usepackage{xcolor}
 \definecolor{codegreen}{rgb}{0,0.6,0}
 \definecolor{codegray}{rgb}{0.5,0.5,0.5}
 \definecolor{codepurple}{rgb}{0.58,0,0.82}
 \begin{document}
-	
-
-	
+	\maketitle
 	\section{مقدمه}
 	هدف از این پروژه، طراحی و پیاده‌سازی یک موتور شطرنج با استفاده از یادگیری عمیق و الگوریتم جستجوی درخت مونت کارلو (MCTS) است. این موتور قادر است با استفاده از یک شبکه عصبی کانولوشن، موقعیت‌های صفحه شطرنج را ارزیابی کرده و با ترکیب آن با جستجوی 
 \lr{MCTS}
@@ -48,16 +66,12 @@ Extension = .ttf
 	 سعی کند تا بهترین حرکت را انتخاب کند. داده‌های آموزش از پایگاه داده Lichess دریافت و پس از فیلتر کردن بر اساس ریتینگ بازیکنان، برای آموزش شبکه عصبی استفاده می‌شوند.
 	
 	\section{معماری شبکه عصبی}
-	شبکه عصبی طراحی شده از نوع کانولوشن با دو خروجی مجزا است: سر سیاست
-	\lr{ (Policy Head)}
-	  و سر ارزش
-	  \lr{(Value Head)}
-	 . این معماری مشابه شبکه‌های استفاده شده در موتورهای معروفی مثل AlphaZero است اما با ابعاد کوچک‌تر برای اجرا روی سخت‌افزار معمولی و برخلاف 
-	 \lr{AlphaZero}
-	 از 
-	 \lr{Supervised Learning}
-	 استفاده می‌شود.
-	
+\begin{figure}[h]
+	\centering
+	\includegraphics[width=0.8\textwidth]{my.pdf}
+	\caption{معماری شبکه}
+	\label{fig:architecture}
+\end{figure}
 	\subsection{ورودی شبکه}
 	ورودی شبکه یک تنسور 19×8×8 است که هر لایه آن اطلاعات متفاوتی از صفحه شطرنج را نمایش می‌دهد:
 	\begin{itemize}
@@ -69,44 +83,112 @@ Extension = .ttf
 		\item کانال 18: تکرار موقعیت
 	\end{itemize}
 	
-	\subsection{لایه‌های استخراج ویژگی}
-	شبکه شامل 4 لایه کانولوشن با مشخصات زیر است:
-	\\
+	\subsection{لایه‌های شبکه }
+	شبکه عصبی دارای 6 بلاک اولیه 
+\lr{Residual}
+هست، که منظور از 
+\lr{Residual}
+این است که ورودی هر بلاک، با خروجی اش جمع خواهد شد. این سبب می‌شود که مشکل محو شدگی گرادیان ها برطرف شود.
+هر کدام از این بلاک ها شامل دو شبکه کانولوشنی 
+\lr{Relu}
+هستند، هر لایه کانولوشن از فیلترهای 3×3 با padding
+برابر 1 استفاده می‌کند که باعث حفظ ابعاد 8×8 صفحه می‌شود. لایه‌های BatchNorm برای نرمال‌سازی استفاده شده‌اند.. نتایج این شبکه سپس به دو سر سیاست
+\lr{ (Policy Head)}
+و سر ارزش
+\lr{(Value Head)}
+داده می‌شود. که هدف سر سیاست، نگاه به صفحه شطرنج و تعیین احتمال هر حرکت در آن موقعیت است، و هدف سر ارزش، تعیین برتری بازیکن سفید یا سیاه است، که بین -1 و 1 قرار دارد. هر چه نزدیک تر به یک باشد، یعنی کاربر سفید برتری بیشتری دارد و هر چه نزدیک تر به -1 باشد یعنی کاربر سیاه برتری بیشتری دارد
+. این معماری مشابه شبکه‌های استفاده شده در موتورهای معروفی مثل 
+\lr{
+ AlphaZero
+\citep{alphazero}
+}
+ است اما با ابعاد کوچک‌تر برای اجرا روی سخت‌افزار معمولی و برخلاف 
+\lr{AlphaZero}
+از 
+\lr{Supervised Learning}
+استفاده می‌شود.
+\\
+کد معماری شبکه در 
+\lr{pytorch}:
 	\begin{latin}
-		\begin{lstlisting}[language=Python, xleftmargin=0pt, linewidth=\textwidth]
-self.features = nn.Sequential(
-nn.Conv2d(19, 128, 3, padding=1),
-nn.BatchNorm2d(128),
-nn.ReLU(inplace=True),
-nn.Dropout2d(0.3),
+	\begin{minted}[fontsize=\small, linenos]{python}
+class ResidualBlock(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+    
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(channels)
+        
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(channels)
+    
+    def forward(self, x):
+        identity = x
 
-nn.Conv2d(128, 128, 3, padding=1),
-nn.BatchNorm2d(128),
-nn.ReLU(inplace=True),
-nn.Dropout2d(0.3),
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = F.relu(out)
+        
+        out = self.conv2(out)
+        out = self.bn2(out)
+        
+        out = out + identity   # Skip connection
+        out = F.relu(out)
+        
+        return out
 
-nn.Conv2d(128, 128, 3, padding=1),
-nn.BatchNorm2d(128),
-nn.ReLU(inplace=True),
-nn.Dropout2d(0.3),
-
-nn.Conv2d(128, 128, 3, padding=1),
-nn.BatchNorm2d(128),
-nn.ReLU(inplace=True),
-nn.Dropout2d(0.3),
+class ChessNet(nn.Module):
+    def __init__(self, num_blocks=6):
+        super(ChessNet, self).__init__()
+        
+        # Initial feature extraction
+        self.input_conv = nn.Sequential(
+        nn.Conv2d(19, 128, 3, padding=1),
+        nn.BatchNorm2d(128),
+        nn.ReLU(inplace=True),
+        )
+        
+        # Residual tower
+        self.residual_layers = nn.Sequential(
+        *[ResidualBlock(128) for _ in range(num_blocks)]
+        )
+        
+        # Policy Head
+        self.policy = nn.Sequential(
+        nn.Conv2d(128, 32, 1),
+        nn.BatchNorm2d(32),
+        nn.ReLU(inplace=True),
+        nn.Flatten(),
+        nn.Linear(32 * 8 * 8, 4096)
+        )
+        
+        # Value Head
+        self.value = nn.Sequential(
+        nn.Conv2d(128, 32, 1),
+        nn.BatchNorm2d(32),
+        nn.ReLU(inplace=True),
+        nn.Flatten(),
+        nn.Linear(32 * 8 * 8, 256),
+        nn.ReLU(inplace=True),
+        nn.Linear(256, 1),
+        nn.Tanh()
+        )
+        
+    def forward(self, x):
+        x = self.input_conv(x)
+        x = self.residual_layers(x)
+    
+        return self.policy(x), self.value(x)
 )
-		\end{lstlisting}
+\end{minted}
 	\end{latin}
-	هر لایه کانولوشن از فیلترهای 3×3 با padding=1 استفاده می‌کند که باعث حفظ ابعاد 8×8 صفحه می‌شود. لایه‌های BatchNorm برای نرمال‌سازی و Dropout با نرخ
-	 \lr{0.3}
-	  برای جلوگیری از بیش‌برازش استفاده شده‌اند.
 	
 	\subsection{سر سیاست 
 		\lr{(Policy Head)}}
-	سر سیاست وظیفه پیش‌بینی بهترین حرکت در هر موقعیت را بر عهده دارد:
+	سر سیاست وظیفه تخمین احتمال  تمامی حرکات در هر موقعیت  شطرنج را بر عهده دارد:
 	\\
 	\begin{latin}
-		\begin{lstlisting}[language=Python]
+\begin{minted}[fontsize=\small, linenos]{python}
 self.policy = nn.Sequential(
 nn.Conv2d(128, 32, 1),
 nn.BatchNorm2d(32),
@@ -114,16 +196,18 @@ nn.ReLU(inplace=True),
 nn.Flatten(),
 nn.Linear(32 * 64, 4096)
 )
-		\end{lstlisting}
+\end{minted}
 	\end{latin}
-	خروجی این سر یک بردار 4096 تایی است که هر عنصر نشان‌دهنده احتمال یک حرکت خاص است. تعداد 4096 از ضرب 64 (خانه مبدأ) در 64 (خانه مقصد) به دست آمده است.
+	خروجی این سر یک بردار 4096 تایی است که هر عنصر نشان‌دهنده احتمال یک حرکت خاص است. تعداد 4096 از ضرب 64 (خانه مبدأ) در 64 (خانه مقصد) به دست آمده است. برخی از این حرکات ممکن است غیر قانونی باشند، به همین خاطر قبل از گرفتن 
+    softmax
+    ابتدا حرکات غیرقانونی را منهی یک عدد منفی خیلی بزرگ میکنیم تا مقدار softmax آنها صفر و در نتیجه تاثیری در احتمال حرکات مجاز نداشته باشند.
 	
 	\subsection{سر ارزش
 		 \lr{(Value Head)}}
-	سر ارزش موقعیت را ارزیابی کرده و یک عدد بین -1 تا 1 برمی‌گرداند که نشان‌دهنده برتری سفید یا سیاه است:
+	سر ارزش موقعیت را ارزیابی کرده و یک عدد بین $-1$ تا $ 1$ برمی‌گرداند که نشان‌دهنده برتری سفید یا سیاه است:
 	\\
 	\begin{latin}
-		\begin{lstlisting}[language=Python]
+\begin{minted}[fontsize=\small, linenos]{python}
 self.value = nn.Sequential(
 nn.Conv2d(128, 32, 1),
 nn.BatchNorm2d(32),
@@ -131,11 +215,10 @@ nn.ReLU(inplace=True),
 nn.Flatten(),
 nn.Linear(32 * 64, 256),
 nn.ReLU(inplace=True),
-nn.Dropout(0.3),
 nn.Linear(256, 1),
 nn.Tanh()
 )
-		\end{lstlisting}
+\end{minted}
 	\end{latin}
 	\section{ارزیابی هیوریستیک}
 	برای برچسب‌زنی داده‌های آموزش بدون نیاز به موتور های شطرنج مانند
@@ -144,29 +227,29 @@ nn.Tanh()
 	\\
 	\subsection{ارزش مهره‌ها}
 	\begin{latin}
-		\begin{lstlisting}[language=Python]
+\begin{minted}[fontsize=\small, linenos]{python}
 piece_values = {
-	chess.PAWN: 100, chess.KNIGHT: 320, chess.BISHOP: 330,
-	chess.ROOK: 500, chess.QUEEN: 900, chess.KING: 0
+    chess.PAWN: 100, chess.KNIGHT: 320, chess.BISHOP: 330,
+    chess.ROOK: 500, chess.QUEEN: 900, chess.KING: 0
 }
-		\end{lstlisting}
+\end{minted}
 	\end{latin}
 	\subsection{جداول مکان مهره‌ها}
-	برای هر مهره، یک جدول 8×8 از امتیازات موقعیتی تعریف شده است. به عنوان مثال، جدول پیاده‌ها:
+	برای هر مهره، یک جدول 8×8 از امتیازات موقعیتی تعریف شده است. به عنوان مثال، جدول پیاده‌ها به طور زیر است. که این یعنی هر چه پیاده به سطر آخر نزدیک تر باشد این بهتر است، چون رسیدن به سطر آخر به معنی ارتقا پیاده به مهره ای با ارزش بیشتر است. دلیل صفر بودن سطر آخر این است که وقتی پیاده به سطر آخر رسید، ارتقا خواهد یافت و دیگر پیاده نخواهد بود، پس هیچ وقت پیاده ای در سطر آخر وجود نخواهد داشت، پس مقادیر سطر آخر مهم نیست. برای بازیکن سیاه همین مقدار منفی خواهند شد و سطر هابرعکس می‌شوند.
 	\\
 	\begin{latin}
-		\begin{lstlisting}[language=Python]
+\begin{minted}[fontsize=\small, linenos]{python}
 pawn_table = [
-[0,  0,  0,  0,  0,  0,  0,  0],
-[50, 50, 50, 50, 50, 50, 50, 50],
-[10, 10, 20, 30, 30, 20, 10, 10],
-[5,  5, 10, 25, 25, 10,  5,  5],
-[0,  0,  0, 20, 20,  0,  0,  0],
-[0,  0,  0,  0,  0,  0,  0,  0],
-[0,  0,  0,  0,  0,  0,  0,  0],
-[0,  0,  0,  0,  0,  0,  0,  0] 
-]
-		\end{lstlisting}
+    [0,  0,  0,  0,  0,  0,  0,  0],
+    [50, 50, 50, 50, 50, 50, 50, 50],
+    [10, 10, 20, 30, 30, 20, 10, 10],
+    [5,  5, 10, 25, 25, 10,  5,  5],
+    [0,  0,  0, 20, 20,  0,  0,  0],
+    [0,  0,  0,  0,  0,  0,  0,  0],
+    [0,  0,  0,  0,  0,  0,  0,  0],
+    [0,  0,  0,  0,  0,  0,  0,  0] 
+    ]
+\end{minted}
 	\end{latin}
 	\subsection{سایر عوامل}
 	عوامل دیگری که در ارزیابی در نظر گرفته شده‌اند:
@@ -179,11 +262,11 @@ pawn_table = [
 	
 	نهایتاً امتیاز نهایی با تابع tanh نرمال‌سازی می‌شود:
 	\[
-	\text{value} = \tanh(\frac{\text{score}}{2000})
+	\text{value} = \tanh(\frac{\text{score}}{1000})
 	\]
 	
 	\section{جستجوی درخت مونت کارلو (MCTS)}
-	الگوریتم MCTS با ترکیب شبکه عصبی، جستجوی هوشمندانه‌ای برای یافتن بهترین حرکت انجام می‌دهد. این الگوریتم از 4 مرحله تشکیل شده است.
+	الگوریتم MCTS با ترکیب شبکه عصبی، جستجوی هوشمندانه‌ای برای یافتن بهترین حرکت انجام می‌دهد. این الگوریتم از 4 مرحله تشکیل شده است، که این مراحل تکرار خواهند شد(در کد تعداد پیش فرض تکرار 800 است).
 	
 	\subsection{مراحل MCTS}
 	
@@ -195,18 +278,21 @@ pawn_table = [
 	
 	که در آن:
 	\begin{itemize}
-		\item \(Q(s,a)\): ارزش فعلی حرکت (نسبت برد به تعداد بازدیدها)
-		\item \(P(s,a)\): احتمال اولیه حرکت از شبکه عصبی
+		\item \(Q(s,a)\): برتری موقعیت شطرنج بعد از انجام حرکت 
+        \lr{a}
+        برای حرکت کننده.
+		\item \(P(s,a)\): احتمال اولیه حرکت از شبکه عصبی که توسط سر سیاست شبکه تعیین می‌شود
 		\item \(N(s)\): تعداد بازدیدهای گره والد
 		\item \(N(s,a)\): تعداد دفعاتی که این حرکت انتخاب شده
-		\item \(c\): ثابت اکتشاف (معمولاً 1.4)
+		\item \(c\): ثابت اکتشاف (معمولاً \lr{1.4}) 
+        که تعیین می‌کند موتور شطرنج چقدر مشتاق به اکتشاف حرکات جدید است.
 	\end{itemize}
 	
 	\subsubsection{بسط (Expansion)}
 	اگر گره انتخاب شده قبلاً بسط داده نشده باشد، تمام حرکات قانونی به عنوان فرزندان آن ایجاد می‌شوند. احتمال اولیه هر حرکت از خروجی Policy Head شبکه عصبی گرفته می‌شود.
 	
 	\subsubsection{ارزیابی (Evaluation)}
-	اگر گره به حالت پایان بازی رسیده باشد، نتیجه واقعی بازی برگردانده می‌شود. در غیر این صورت، شبکه عصبی برای ارزیابی موقعیت فراخوانی می‌شود و خروجی Value Head به عنوان ارزش موقعیت در نظر گرفته می‌شود.
+	اگر گره به حالت پایان بازی رسیده باشد، نتیجه واقعی بازی برگردانده می‌شود. در غیر این صورت، شبکه عصبی برای ارزیابی موقعیت فراخوانی می‌شود و خروجی سر ارزش به عنوان ارزش موقعیت در نظر گرفته می‌شود.
 	
 	\subsubsection{بازگشت (Backup)}
 	ارزش به‌دست آمده در تمام گره‌های مسیر جستجو به‌روزرسانی می‌شود:
@@ -220,86 +306,94 @@ pawn_table = [
 	کلاس‌های اصلی MCTS به صورت زیر پیاده‌سازی شده‌اند:
 	\\
 	\begin{latin}
-		\begin{lstlisting}[language=Python]
+\begin{minted}[fontsize=\small, linenos]{python}
 class MCTSNode:
-	def __init__(self, board, parent=None, move=None, prior=0):
-		self.board = board
-		self.parent = parent
-		self.move = move
-		self.prior = prior
-		self.visits = 0
-		self.value_sum = 0
-		self.children = {}
-		self.is_expanded = False
-	
-	def value(self):
-		if self.visits == 0:
-			return 0
-		return self.value_sum / self.visits
-	
-	def ucb_score(self, exploration_constant=1.4):
-		if self.visits == 0:
-			return float('inf')
-		exploration = exploration_constant * self.prior * \
-		math.sqrt(self.parent.visits) / (1 + self.visits)
-		return self.value() + exploration
-		\end{lstlisting}
-	\end{latin}
+    def __init__(self, board, parent=None, move=None, prior=0):
+        self.board = board
+        self.parent = parent
+        self.move = move
+        self.prior = prior
+        self.visits = 0
+        self.value_sum = 0
+        self.children = {}
+        self.is_expanded = False
+
+    def value(self):
+        if self.visits == 0:
+            return 0
+        return self.value_sum / self.visits
+
+    def ucb_score(self, exploration_constant=1.4):
+        if self.visits == 0:
+            return float('inf')
+        exploration = exploration_constant * self.prior * \
+            math.sqrt(self.parent.visits) / (1 + self.visits)
+        return self.value() + exploration
+\end{minted}
+\end{latin}
 	
 	و کلاس اصلی MCTS:
 	\\
 	\begin{latin}
-		\begin{lstlisting}[language=Python]
+\begin{minted}[fontsize=\small, linenos]{python}
 class MCTS:
-	def __init__(self, model, num_simulations=800):
-		self.model = model
-		self.num_simulations = num_simulations
-		self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-	
-	def search(self, board):
-		root = MCTSNode(board.copy())
-	
-		for _ in range(self.num_simulations):
-			node = root
-			path = [node]
-		
-		# Selection
-		while node.is_expanded and node.children:
-			node = self.select_child(node)
-			path.append(node)
-	
-		# Expansion
-		if not node.board.is_game_over() and not node.is_expanded:
-			self.expand(node)
-			node.is_expanded = True
-	
-		# Evaluation
-		if node.board.is_game_over():
-			value = self.get_game_result(node.board)
-		else:
-			value = self.evaluate(node.board)
-	
-		# Backup
-		for node in reversed(path):
-			node.visits += 1
-			node.value_sum += value
-			value = -value
-	
-		return root
-		\end{lstlisting}
+    def __init__(self, model, num_simulations=800):
+        self.model = model
+        self.num_simulations = num_simulations
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+    def search(self, board):
+        root = MCTSNode(board.copy())
+        for _ in range(self.num_simulations):
+            node = root
+            path = [node]
+            # Selection
+            while node.is_expanded and node.children:
+                node = max(node.children.values(), key=lambda c: c.ucb_score())
+                path.append(node)
+            
+            # Expansion
+            if not node.board.is_game_over() and not node.is_expanded:
+                self.expand(node)
+                node.is_expanded = True
+            
+            # Evaluation
+            if node.board.is_game_over():
+                # Game over
+                result = node.board.result()
+                if result == "1-0":
+                    value = 1
+                elif result == "0-1":
+                    value = -1
+                else:
+                    value = 0.0
+            else:
+                # Use neural network for evaluation
+                value = self.evaluate(node.board)
+            if node.board.turn == chess.WHITE:
+                value = -value
+            #Backpropagation
+            for node in reversed(path):
+                node.visits += 1
+                node.value_sum += value
+                value = -value  # Flip for next parent
+                
+        return root
+\end{minted}
 	\end{latin}
 	
 	\section{آماده‌سازی داده‌ها}
-	داده‌های آموزش از پایگاه داده Lichess دریافت می‌شوند. این پایگاه داده شامل میلیون‌ها بازی شطرنج با فرمت PGN است.
+	داده‌های آموزش از پایگاه داده Lichess دریافت می‌شوند. این پایگاه داده شامل میلیون‌ها بازی شطرنج با فرمت PGN یا CVS است.
 	
 	\subsection{دریافت و فیلتر کردن فایل‌ها}
-	فایل‌های PGN با فرمت فشرده zst از آدرس \lr{https://database.lichess.org/} دریافت می‌شوند. در این پروژه از دو فایل استفاده شده است:
+	فایل‌های PGN و CSV با فرمت فشرده zst از آدرس \lr{https://database.lichess.org/} دریافت می‌شوند. در این پروژه از سه فایل استفاده شده است:
 	\begin{itemize}
-		\item \lr{lichess\_db\_standard\_rated\_2015-01.pgn.zst} برای آموزش
-		\item \lr{lichess\_db\_standard\_rated\_2013-01.pgn.zst} برای آزمون
+		\item \lr{lichess\_db\_standard\_rated\_2015-01.pgn.zst} 
+		\item \lr{lichess\_db\_standard\_rated\_2013-01.pgn.zst} 
+        \item \lr{lichess\_db\_puzzle.csv.zst}
 	\end{itemize}
 	
-	برای فیلتر کردن بر اساس ریتینگ، تابع \lr{safe\_elo} نوشته شده است.
+	برای فیلتر کردن بر اساس ریتینگ، تابع \lr{safe\_elo} نوشته شده است. دو فایل اول شامل بازی های مختلف بین افراد مختلف است، فایل سوم شامل یکسری پازل شطرنج، همراه با راه حل آن هاست. 80 درصد این داده های برای train مدل و 20 درصد برای validation به کار رفته است.
 	
 	\subsection{استخراج موقعیت‌ها}
 	از هر بازی، تعدادی موقعیت تصادفی (پیش‌فرض 15موقعیت) استخراج می‌شود. برای هر موقعیت، موارد زیر ذخیره می‌گردد:
@@ -310,26 +404,6 @@ class MCTS:
 		\lr{policy}
 		از آن استفاده می‌شود.
 	\end{itemize}
-	
-	\subsection{ذخیره‌سازی دسته‌ای (Batch Saving)}
-	برای جلوگیری از مصرف بیش از حد حافظه، داده‌ها به صورت دسته‌های 5۰۰۰۰ تایی ذخیره می‌شوند:
-	\\
-	\begin{latin}
-		\begin{lstlisting}[language=Python]
-def save_batch(tensors, values, policies, prefix, batch_num):
-	X = torch.stack(tensors)
-	y_value = torch.tensor(values, dtype=torch.float32)
-	y_policy = torch.tensor(policies, dtype=torch.long)
-
-	filename = f"{prefix}_batch_{batch_num:04d}.pt"
-	torch.save({
-		'X': X,
-		'y_value': y_value,
-		'y_policy': y_policy,
-		'num_positions': len(tensors)
-	}, filename)
-		\end{lstlisting}
-	\end{latin}
 	
 	\section{آموزش مدل}
 	فرآیند آموزش با استفاده از بهینه‌ساز AdamW و تابع Loss ترکیبی انجام می‌شود.
@@ -349,29 +423,40 @@ def save_batch(tensors, values, policies, prefix, batch_num):
 	\subsection{جلوگیری از بیش‌برازش}
 	برای جلوگیری از بیش‌برازش (Overfitting)، چندین روش استفاده شده است:
 	
-	\subsubsection{Dropout}
-	لایه‌های Dropout با نرخ
-	\lr{ 0.3}
-	 بعد از هر لایه فعال‌سازی قرار داده شده‌اند. Dropout به صورت تصادفی برخی نورون‌ها را در هر مرحله آموزش غیرفعال می‌کند و باعث می‌شود شبکه وابستگی کمتری به نورون‌های خاص پیدا کند.
-	
 	\subsubsection{Weight Decay}
 	در بهینه‌ساز AdamW از پارامتر weight\_decay با مقدار 1e-4 استفاده شده است. این کار یک جریمه به وزن‌های بزرگ اضافه می‌کند و باعث ساده‌تر شدن مدل می‌شود.
 	
 	\subsubsection{Early Stopping}
 	 در هر epoch  بهترین مدل بر اساس کمترین خطای اعتبارسنجی انتخاب می‌گردد و ذخیره می‌شود:
-	
+	\\
 	\begin{latin}
-		\begin{lstlisting}[language=Python]
+\begin{minted}[fontsize=\small, linenos]{python}
 if avg_val < best_val_loss:
-	best_val_loss = avg_val
-	torch.save(self.model.state_dict(), 
-		f"chess_model_BEST_val_{best_val_loss:.4f}.pth")
-		\end{lstlisting}
+    best_val_loss = avg_val
+    torch.save(self.model.state_dict(), 
+        f"chess_model_BEST_val_{best_val_loss:.4f}.pth")
+\end{minted}
 	\end{latin}
 	
 	\section{اجرای برنامه}
+ابتدا پکیج های مورد نیاز برناهه به طور زیر نصب می‌شوند:
+\\
+
+		\begin{latin}
+		\begin{lstlisting}[language=Python]
+python -m pip install -r requirements.txt
+		\end{lstlisting}
+	\end{latin}
+سپس مدل را با دستور زیر می‌شود اجرا کرد:
+\\
+		\begin{latin}
+	\begin{lstlisting}[language=Python]
+python ./chess_engine_main.py
+	\end{lstlisting}
+\end{latin}
+
 	برنامه دارای یک منوی تعاملی با گزینه‌های زیر است:
-	
+	\\
 	\begin{latin}
 		\begin{verbatim}
 			Options:
@@ -384,19 +469,166 @@ if avg_val < best_val_loss:
 		\end{verbatim}
 	\end{latin}
 	
+	که اول گزینه دو برای لود کردن مدل تمرین داده شده و سپس می‌شود با مدل بازی کرد.
+	برای تمرین دادن مدلی جدید باید ابتدا دستور:
+	\\
+			\begin{latin}
+		\begin{lstlisting}[language=Python]
+python ./data.py
+		\end{lstlisting}
+	\end{latin}
+
+اجرا شود، این فایل داده های مورد نیاز برای تمرین مدل را آماده و در پوشه:
+\lr{chess\_data}
+ذخیره می کند.  سپس با اجرای فایل 
+\lr{chess\_engine\_main.py}
+و انتخاب گزینه 1 برای  تمرین مدل شروع می شود و مدل های یادگیری شده در فایل هایی با پسوند 
+\lr{pth}
+ذخیره می‌شوند که آن ها را میتوان  با استفاده از گزینه 2 لود کرد.
 	\subsection{آماده‌سازی داده‌ها}
 	برای آماده‌سازی داده‌ها، اسکریپت \lr{data.py} اجرا می‌شود.
 	
 	این اسکریپت فایل‌های zst را پردازش کرده و فایل‌های دسته‌ای با نام \lr{chess\_data\_batch\_*.pt} را در ایجاد میکند، که برای یادگیری استفاده می‌شوند.
 	
 	\subsection{آموزش مدل}
-	پس از آماده‌سازی داده‌ها، با انتخاب گزینه 1 از منو و وارد کردن پارامترهای آموزش، فرآیند آموزش آغاز می‌شود. در طول آموزش، مدل‌ها با نام‌های زیر ذخیره می‌شوند:
+	پس از آماده‌سازی داده‌ها، با انتخاب گزینه 1 از منو و وارد کردن پارامترهای آموزش، فرآیند آموزش آغاز می‌شود. در طول آموزش، مدل‌ها با نام‌هایی مانند زیر ذخیره می‌شوند:
 	\begin{itemize}
-		\item \lr{chess\_model\_val\_2.3456\_epoch\_1.pth}
-		\item \lr{chess\_model\_val\_2.1234\_epoch\_2.pth}
-		\item \lr{chess\_model\_BEST\_val\_1.8765.pth} (بهترین مدل)
+		\item \lr{chess\_model\_BEST\_val\_2.0604.pth} 
+		\item \lr{chess\_model\_BEST\_val\_2.0529.pth} (بهترین مدل تا الان)
 	\end{itemize}
 	
 	\subsection{بازی با موتور}
 	با انتخاب گزینه‌های 3 تا 5 می‌توان با موتور بازی کرد یا آن را در مقابل حرکات تصادفی مشاهده نمود. موتور با انجام 800 شبیه‌سازی MCTS برای هر حرکت، بهترین حرکت را انتخاب می‌کند.
+	\subsection{نتایج}
+	این مدل با استفاده از
+	\lr{ 11.5 }
+	 میلیون موقعیت بازی شطرنج برای 
+	\lr{14 epoch}
+	 یادگیری داده شده. در هنگام بازی، تعداد شبیه سازی های MCTS برابر 800 قرار داده شده. در ادامه برخی بازی های این موتور در برابر حرکات شانسی نمایش داده شده (سفید موتور است و سیاه حرکات شانسی):
+	 
+\setLR
+\begin{latin}
+\newgame
+\mainline{
+	 1.e4 Nc6
+	 2.Nf3 e6
+	 3.d4 Nh6
+	 4.Nc3 Ba3
+	 5.bxa3 Qf6
+	 6.Bd3 Qd8
+	 7.O-O Ne5
+	 8.Nxe5 c5
+	 9.f4 g5
+	 10.Qh5 b5
+	 11.Qxf7+ Nxf7
+	 12.Nb5 Rg8
+	 13.d5 gxf4
+	 14.Bxf4 exd5
+	 15.exd5 Bb7
+	 16.Nd6+ Ke7
+	 17.Nf5+ Kf6
+	 18.Nxf7 Rg4
+	 19.Bg5+ Kg6
+	 20.Nf5h6 Kh5
+	 21.Bxd8 d6
+	 22.Rf5 Kg6
+	 23.Rg5#
+}
+\\
+\chessboard
+
+
+\textbf{white wins}
+\end{latin}
+\setRL
+بازی دوم:
+\setLR
+\begin{latin}
+\newgame
+\mainline{
+1.e4 g5
+2.d4 a6
+3.Nf3 c6
+4.Bc4 Qb6
+5.O-O Qc5
+6.dxc5 e5
+7.Bg5 f5
+8.exf5 Ra7
+9.Ne5 Ra8
+10.Qh5
+}
+\\
+\chessboard
+
+
+\textbf{white wins}
+\end{latin}
+\setRL
+بازی سوم:
+\setLR
+\begin{latin}
+	\newgame
+	\mainline{
+1.e4 Nh6
+2.Nf3 b5
+3.Bxb5 g5
+4.Nxg5 Ba6
+5.Bxa6 Ng8
+6.Bc4 c5
+7.Bxf7# 
+	}
+	\\
+	\chessboard
+	
+	
+	\textbf{white wins}
+\end{latin}
+\setRL
+در ادامه بازی ای داریم که موتور  در برابر خودش بازی کرده:
+\setLR
+\begin{latin}
+	\newgame
+	\mainline{
+1.e4 Nf6
+2.e5 Nd5
+3.Nf3 Nc6
+4.Bc4 Nb6
+5.Bb3 d5
+6.exd6 Qxd6
+7.O-O Bg4
+8.d4 Bxf3
+9.Qxf3 Nxd4
+10.Qxf7+ Kd8
+11.Nc3 Nxb3
+12.axb3 Kd7
+13.Be3 Qc6
+14.Rad1+ Kc8
+15.Bxb6 axb6
+16.Rfe1 e6
+17.Ne4 Ra5
+18.Rd3 Re5
+19.Qf4 Rxe4
+20.Rxe4 Qxc2
+21.Rxe6 Qxd3
+22.Re8+ Kd7
+23.Re1 Bd6
+24.Qf7+ Kc6
+25.Qxg7 Rd8
+26.Qf7 Rd7
+27.Qe8 Qxb3
+28.Qe4+ Kb5
+29.Qxb7 Qxb2
+30.Qc8 Kc6
+31.Re8 Rf7
+32.Qb8 Qxf2+
+33.Kh1 Qf1#
+}
+	\\
+	\chessboard
+    \\
+	\textbf{black wins}
+\end{latin}
+
+\bibliographystyle{plainnat}  % or another style
+\bibliography{refs}  
 \end{document}
