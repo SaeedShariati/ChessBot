@@ -3,12 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import chess
-import chess.pgn
 import io
 import os
-from collections import deque
 import math
-import random
 import time
 import io
 import random
