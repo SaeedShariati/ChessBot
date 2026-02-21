@@ -457,7 +457,8 @@ class ChessEngine:
     def __init__(self, model_path=None):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = ChessNet().to(self.device)
-        
+        self.optimizer = None
+        self.best_val_loss = float('inf')
         if model_path and os.path.exists(model_path):
             self.model.load_state_dict(torch.load(model_path, map_location=self.device))
             print(f"Loaded model from {model_path}")
@@ -470,7 +471,7 @@ class ChessEngine:
         Train using batched data files and save models with validation loss in filename
         """
         import glob
-        
+        self.model.train()
         print(f"Loading batches from ./chess_data/{data_prefix}_batch_*.pt...")
         
         # Find all batch files
@@ -514,11 +515,11 @@ class ChessEngine:
         # Training setup
         device = self.device
         self.model = self.model.to(device)
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=0.001, weight_decay=1e-4)
+        if optimizer==None:
+            self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=0.001, weight_decay=1e-4)
         
         print(f"\nStarting training for {epochs} epochs...")
-        
-        best_val_loss = float('inf')
+
         
         for epoch in range(epochs):
             # Training
@@ -569,18 +570,22 @@ class ChessEngine:
             avg_value_loss = tot_value_loss/val_batches
             avg_policy_loss = tot_policy_loss/val_batches
             # Track best model
-            if avg_val < best_val_loss:
-                best_val_loss = avg_val
-                best_filename = f"chess_model_BEST_val_{best_val_loss:.4f}.pth"
+            if avg_val < self.best_val_loss:
+                self.best_val_loss = avg_val
+                best_filename = f"best_{self.best_val_loss:.4f}.pth"
                 # Save a copy as the best model
-                torch.save(self.model.state_dict(), best_filename)
+                torch.save({    'epoch': epoch,
+                                'model_state_dict': self.model.state_dict(),
+                                'optimizer_state_dict': optimizer.state_dict(),
+                                'best_val_loss': self.best_val_loss}, 
+                                best_filename)
                 print(f"Epoch {epoch+1}: Train Loss: {avg_train:.4f}, Val Loss: (value:{avg_value_loss:.4f}+policy:{avg_policy_loss:.4f})={avg_val:.4f} ✓ BEST SO FAR")
             else:
                 print(f"Epoch {epoch+1}: Train Loss: {avg_train:.4f}, Val Loss: (value:{avg_value_loss:.4f}+policy:{avg_policy_loss:.4f})={avg_val:.4f}")
         
         print(f"\nTraining complete!")
-        print(f"Best validation loss: {best_val_loss:.4f}")
-        print(f"Best model saved as: chess_model_BEST_val_{best_val_loss:.4f}.pth")
+        print(f"Best validation loss: {self.best_val_loss:.4f}")
+        print(f"Best model saved as: chess_model_BEST_val_{self.best_val_loss:.4f}.pth")
     # Keep your existing play_move and play_game methods
     def play_move(self, board, num_simulations=800):
         if self.mcts is None:
@@ -687,7 +692,7 @@ class ChessEngine:
                     print(f"  {board.san(move)}: {prob:.4f}")
             
             print("-" * 40)
-    def debug_mcts_position(self, fen=None, num_simulations=20000):
+    def debug_mcts_position(self, fen=None, num_simulations=800):
         """Complete MCTS debug showing policy, value, and search results"""
         
         if fen is None:
@@ -865,7 +870,13 @@ def main():
         elif choice == "2":
             model_path = input("Enter model path (default: chess_model.pth): ") or "chess_model.pth"
             if os.path.exists(model_path):
-                engine.model.load_state_dict(torch.load(model_path, map_location=engine.device))
+                checkpoint = torch.load(model_path, map_location=engine.device)
+                engine.model.load_state_dict(checkpoint['model_state_dict'])
+                optimizer = torch.optim.Adam(engine.model.parameters(), lr=0.001, weight_decay=1e-4)
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                engine.optimizer=optimizer
+                engine.best_val_loss= checkpoint.get('best_val_loss', float('inf'))
+                #engine.model.load_state_dict(torch.load(model_path, map_location=engine.device))
                 print("Model loaded")
             else:
                 print("Model not found")
